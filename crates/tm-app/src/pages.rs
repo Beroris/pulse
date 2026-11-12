@@ -518,17 +518,16 @@ fn mem_detail(f: &Frame, info: &SystemInfo, h: &Histories, interval: f32) -> Det
             ];
         }
     }
-    let mut in_use = format::bytes(m.used());
-    if let Some(c) = m.compressed.filter(|c| *c > 0) {
-        in_use = format!("{in_use} ({} compressed)", format::bytes(c));
-    }
     d.live = vec![
-        stat_tip("In use", in_use, "Total memory minus what's available."),
+        stat_tip("In use", format::bytes(m.used()), "Total memory minus what's available."),
         stat_tip("Available", format::bytes(m.available), "Free plus standby memory: what programs can get without anything being written out."),
         stat_tip("Committed", format!("{} / {}", format::bytes(m.commit), format::bytes(m.commit_limit)), "Memory programs have reserved, against the limit of RAM plus page file."),
     ];
     if let Some(c) = m.cached {
         d.live.push(stat_tip("Cached", format::bytes(c), "Standby and modified memory."));
+    }
+    if let Some(c) = m.compressed.filter(|c| *c > 0) {
+        d.live.push(stat_tip("Compressed", format::bytes(c), "RAM taken up by the store of compressed memory. It is part of the memory in use."));
     }
     if let Some(p) = m.paged_pool {
         d.live.push(stat_tip("Paged pool", format::bytes(p), "Kernel memory that can be written to the page file."));
@@ -771,7 +770,8 @@ pub fn compact(metrics: &[Metric], f: &Frame, info: &SystemInfo, h: &Histories) 
                     graph(&r, top, POINTS)
                 };
                 CompactMetric {
-                    label: "Network".into(),
+                    // Short, because the value beside it is two speeds wide.
+                    label: "Net".into(),
                     value: match (recv, send) {
                         (Some(r), Some(s)) => format!("↓ {}  ↑ {}", format::bits(r), format::bits(s)),
                         _ => "—".into(),

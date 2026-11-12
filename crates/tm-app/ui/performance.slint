@@ -43,6 +43,8 @@ component GraphBlock inherits VerticalLayout {
     in property <PerfGraph> g;
     in property <length> graph-height;
     spacing: 4px;
+    // Without this the title row stretches to fill the block and pushes the graph to its bottom.
+    alignment: start;
     HorizontalLayout {
         Text { text: root.g.title; color: Theme.secondary; font-size: Theme.small; overflow: elide; horizontal-stretch: 1; }
         Text { text: root.g.right; color: Theme.tertiary; font-size: Theme.small; }
@@ -152,6 +154,7 @@ export component PerformancePage inherits Rectangle {
                             x: g.big ? 0px : mod(k, 2) * (parent.half + root.gap);
                             y: g.big ? 0px : (parent.has-big ? parent.block-big + root.gap : 0px) + floor(k / 2) * (parent.block-small + root.gap);
                             width: g.big ? parent.width : parent.half;
+                            height: g.big ? parent.block-big : parent.block-small;
                             graph-height: g.big ? parent.big-h : parent.small-h;
                             g: g;
                         }

@@ -18,6 +18,9 @@ pub struct SampleRequest {
     pub memory_detail: bool,
     /// Temperatures and GPU clocks.
     pub sensors: bool,
+    /// Read every GPU engine each time. Otherwise a backend may read engines that have been idle
+    /// for a while less often, and so notice one starting work a few seconds late.
+    pub gpu_engines: bool,
 }
 
 /// Reads counters. Owned by the collector thread.

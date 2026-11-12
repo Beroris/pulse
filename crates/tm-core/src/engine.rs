@@ -31,13 +31,15 @@ pub struct Demand {
     pub process_gpu: bool,
     pub memory_detail: bool,
     pub sensors: bool,
+    /// Every GPU engine is on screen, so read them all each tick.
+    pub gpu_engines: bool,
     /// Stop sampling altogether (hidden with background monitoring off).
     pub paused: bool,
 }
 
 impl Default for Demand {
     fn default() -> Self {
-        Self { processes: true, windows: true, services: true, process_gpu: false, memory_detail: true, sensors: true, paused: false }
+        Self { processes: true, windows: true, services: true, process_gpu: false, memory_detail: true, sensors: true, gpu_engines: true, paused: false }
     }
 }
 
@@ -307,7 +309,7 @@ impl Worker {
                     match cmd {
                         Command::Demand(d) => {
                             let woke = self.demand.paused && !d.paused;
-                            let more = (d.processes && !self.demand.processes) || (d.process_gpu && !self.demand.process_gpu);
+                            let more = (d.processes && !self.demand.processes) || (d.process_gpu && !self.demand.process_gpu) || (d.gpu_engines && !self.demand.gpu_engines);
                             self.demand = d;
                             if woke {
                                 // Rates across a long pause would be averages over the pause: start fresh.
@@ -384,6 +386,7 @@ impl Worker {
             process_gpu: d.processes && d.process_gpu,
             memory_detail: d.memory_detail,
             sensors: d.sensors || self.ticks % 5 == 0,
+            gpu_engines: d.gpu_engines,
         }
     }
 

@@ -30,6 +30,75 @@ struct Adapter {
     /// Nodes that have ever run anything; the rest are skipped per process.
     used_nodes: Vec<bool>,
     three_d_node: Option<u32>,
+    /// Per node: its last reading, and whether it's worth reading every time.
+    node_state: Vec<Node>,
+    /// When the adapter was last sampled (100 ns).
+    sampled: u64,
+    /// The 3D engine's clock, from its last reading.
+    clock_mhz: Option<u32>,
+}
+
+const SECOND: u64 = 10_000_000;
+/// An engine whose running time hasn't moved for this long is read less often. Reading one costs
+/// the driver about half a millisecond, and most adapters have a dozen engines that never run.
+const QUIET_AFTER: u64 = 10 * SECOND;
+/// How often a quiet engine is read, to notice it starting work.
+const QUIET_RECHECK: u64 = 5 * SECOND;
+/// The same for an engine that has not run at all since Windows started, which is most of them.
+const UNUSED_RECHECK: u64 = 15 * SECOND;
+
+#[derive(Clone, Copy, Default)]
+struct Node {
+    /// The last reading: when it was taken (100 ns) and the cumulative running time.
+    read: Option<(u64, u64)>,
+    /// When the running time last moved.
+    changed: u64,
+    /// Running time left out of what is reported. See [`Node::record`].
+    skipped: u64,
+}
+
+impl Node {
+    /// Whether to read the engine now. `all` reads it regardless.
+    fn due(&self, now: u64, all: bool) -> bool {
+        let Some((at, running)) = self.read else { return true };
+        let recheck = if running == 0 { UNUSED_RECHECK } else { QUIET_RECHECK };
+        all || now.saturating_sub(self.changed) < QUIET_AFTER || now.saturating_sub(at) >= recheck
+    }
+
+    /// Takes a reading and returns the running time to report. `previous` is when the adapter was
+    /// last sampled.
+    ///
+    /// A quiet engine that has worked since its last reading did so at some point in a gap of
+    /// several samples. Only the part that belongs to the latest interval, at the gap's average
+    /// rate, is reported; the rest is left out for good. Otherwise seconds of work would show as
+    /// one spike in the latest interval.
+    fn record(&mut self, now: u64, previous: u64, running: u64) -> u64 {
+        match self.read {
+            // The counter went backwards: the driver restarted. Start again from this reading.
+            Some((_, before)) if running < before => {
+                self.skipped = 0;
+                self.changed = now;
+            }
+            Some((at, before)) if running > before => {
+                self.changed = now;
+                let (gap, interval) = (now.saturating_sub(at), now.saturating_sub(previous));
+                if at < previous && interval < gap {
+                    let delta = running - before;
+                    self.skipped += delta - (delta as u128 * interval as u128 / gap as u128) as u64;
+                }
+            }
+            Some(_) => {}
+            // An engine that has never run is quiet from the start.
+            None => self.changed = if running > 0 { now } else { 0 },
+        }
+        self.read = Some((now, running));
+        running.saturating_sub(self.skipped)
+    }
+
+    /// What to report without a new reading: the engine was idle when last read.
+    fn reported(&self) -> Option<u64> {
+        self.read.map(|(_, running)| running.saturating_sub(self.skipped))
+    }
 }
 
 impl Drop for Adapter {
@@ -180,6 +249,9 @@ impl Gpus {
                 process_engine,
                 used_nodes: vec![true; nodes as usize],
                 three_d_node,
+                node_state: vec![Node::default(); nodes as usize],
+                sampled: 0,
+                clock_mhz: None,
             });
         }
         let mut freq = 0i64;
@@ -191,25 +263,37 @@ impl Gpus {
         self.adapters.iter().map(|a| a.info.clone()).collect()
     }
 
-    pub fn sample(&mut self, sensors: bool) -> Vec<RawGpu> {
+    /// `all_engines` reads every engine. Without it, engines that have been idle for a while are
+    /// read every few seconds instead, and report their last value in between.
+    pub fn sample(&mut self, sensors: bool, all_engines: bool) -> Vec<RawGpu> {
         let mut out = Vec::with_capacity(self.adapters.len());
         for a in &mut self.adapters {
             let ts = c_now(self.qpc_freq);
             let mut g = RawGpu { id: a.info.id, timestamp: ts, ..Default::default() };
             g.engine_time = Vec::with_capacity(a.nodes as usize);
             let mut freq_3d = None;
+            let mut read_3d = false;
             for n in 0..a.nodes {
+                let state = &mut a.node_state[n as usize];
+                if !state.due(ts, all_engines) {
+                    g.engine_time.push(state.reported());
+                    continue;
+                }
                 let r = stats(a.luid, D3DKMT_QUERYSTATISTICS_NODE, HANDLE::default(), n);
                 g.engine_time.push(r.map(|q| {
                     let ni = unsafe { q.QueryResult.NodeInformation };
-                    if Some(n) == a.three_d_node && ni.NodePerfData.Frequency > 0 {
-                        freq_3d = Some((ni.NodePerfData.Frequency / 1_000_000) as u32);
+                    if Some(n) == a.three_d_node {
+                        read_3d = true;
+                        if ni.NodePerfData.Frequency > 0 {
+                            freq_3d = Some((ni.NodePerfData.Frequency / 1_000_000) as u32);
+                        }
                     }
                     let t = ni.GlobalInformation.RunningTime.max(0) as u64;
                     a.used_nodes[n as usize] = t > 0;
-                    t
+                    state.record(ts, a.sampled, t)
                 }));
             }
+            a.sampled = ts;
             let (mut dedicated, mut shared, mut any) = (0u64, 0u64, false);
             for s in 0..a.segments {
                 let Some(q) = stats(a.luid, D3DKMT_QUERYSTATISTICS_SEGMENT, HANDLE::default(), s) else { continue };
@@ -228,7 +312,8 @@ impl Gpus {
             g.dedicated_limit = a.info.dedicated;
             g.shared_limit = a.info.shared;
             if sensors && a.handle != 0 {
-                if freq_3d.is_none() {
+                // While the 3D engine is quiet and not read, its last clock stands.
+                if freq_3d.is_none() && read_3d {
                     if let Some(n) = a.three_d_node {
                         let mut np = D3DKMT_NODE_PERFDATA { NodeOrdinal: n, ..Default::default() };
                         if query_info(a.handle, KMTQAITYPE_NODEPERFDATA, &mut np) && np.Frequency > 0 {
@@ -236,7 +321,10 @@ impl Gpus {
                         }
                     }
                 }
-                g.clock_mhz = freq_3d;
+                if read_3d {
+                    a.clock_mhz = freq_3d;
+                }
+                g.clock_mhz = a.clock_mhz;
                 let mut p = D3DKMT_ADAPTER_PERFDATA::default();
                 if query_info(a.handle, KMTQAITYPE_ADAPTERPERFDATA, &mut p) {
                     // Tenths of a degree; zero means the driver doesn't report it.
@@ -322,11 +410,115 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_engine_that_never_ran_is_read_every_few_seconds() {
+        let mut n = Node::default();
+        let start = 1000 * SECOND;
+        assert!(n.due(start, false), "the first reading is always taken");
+        assert_eq!(n.record(start, 0, 0), 0);
+        assert!(!n.due(start + SECOND, false));
+        assert!(n.due(start + SECOND, true), "unless every engine is asked for");
+        assert_eq!(n.reported(), Some(0));
+        assert!(!n.due(start + QUIET_RECHECK, false));
+        assert!(n.due(start + UNUSED_RECHECK, false));
+    }
+
+    #[test]
+    fn a_busy_engine_is_read_every_time_until_it_has_been_still_a_while() {
+        let mut n = Node::default();
+        let start = 1000 * SECOND;
+        n.record(start, 0, 5 * SECOND);
+        let mut now = start;
+        for i in 1..=3u64 {
+            now = start + i * SECOND;
+            assert!(n.due(now, false));
+            // Read every time, so everything it did is reported.
+            assert_eq!(n.record(now, now - SECOND, 5 * SECOND + i * SECOND / 2), 5 * SECOND + i * SECOND / 2);
+        }
+        // Still from here on: read each time for a while, then only now and then.
+        let still_since = now;
+        let mut last_read = now;
+        let mut skipped_a_reading = false;
+        for i in 1..=20u64 {
+            let t = still_since + i * SECOND;
+            if n.due(t, false) {
+                n.record(t, t - SECOND, 5 * SECOND + 3 * SECOND / 2);
+                last_read = t;
+            } else {
+                skipped_a_reading = true;
+                assert!(t - still_since >= QUIET_AFTER, "not quiet before {} s", QUIET_AFTER / SECOND);
+                assert!(t - last_read < QUIET_RECHECK);
+            }
+        }
+        assert!(skipped_a_reading);
+    }
+
+    #[test]
+    fn work_found_late_is_not_shown_as_one_spike() {
+        let mut n = Node::default();
+        let start = 1000 * SECOND;
+        n.record(start, 0, 0);
+        // Not read for five seconds, during which it ran for two.
+        let now = start + 5 * SECOND;
+        let reported = n.record(now, now - SECOND, 2 * SECOND);
+        assert_eq!(reported, 2 * SECOND / 5, "the latest second gets its share of the gap's work");
+        // It is busy now, so it's read each time and reported in full from here.
+        assert!(n.due(now + SECOND, false));
+        assert_eq!(n.record(now + SECOND, now, 2 * SECOND + SECOND / 2) - reported, SECOND / 2);
+    }
+
+    #[test]
+    fn a_counter_that_starts_again_is_taken_as_it_is() {
+        let mut n = Node::default();
+        let start = 1000 * SECOND;
+        n.record(start, 0, 0);
+        n.record(start + 5 * SECOND, start + 4 * SECOND, 3 * SECOND);
+        assert_eq!(n.record(start + 6 * SECOND, start + 5 * SECOND, SECOND / 10), SECOND / 10);
+    }
+
+    /// What each kind of statistics query costs: `cargo test -p tm-windows -- --ignored --nocapture query_costs`
+    #[test]
+    #[ignore]
+    fn query_costs() {
+        let Some(g) = Gpus::new() else { return };
+        for a in &g.adapters {
+            println!("{}: {} nodes, {} segments", a.info.name, a.nodes, a.segments);
+            let read = || -> Vec<i64> {
+                (0..a.nodes).map(|n| stats(a.luid, D3DKMT_QUERYSTATISTICS_NODE, HANDLE::default(), n).map_or(-1, |q| unsafe { q.QueryResult.NodeInformation.GlobalInformation.RunningTime })).collect()
+            };
+            let before = read();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            for (n, (b, a2)) in before.iter().zip(read()).enumerate() {
+                println!("  node {n:<3}{:<22} total {:>10.1} s, last 2 s: {:>6.1} ms", a.info.engines[n], a2 as f64 / 1e7, (a2 - b) as f64 / 1e4);
+            }
+            for (kind, label, count) in [(D3DKMT_QUERYSTATISTICS_NODE, "node", a.nodes), (D3DKMT_QUERYSTATISTICS_SEGMENT, "segment", a.segments)] {
+                for id in 0..count {
+                    let t = std::time::Instant::now();
+                    for _ in 0..50 {
+                        stats(a.luid, kind, HANDLE::default(), id);
+                    }
+                    println!("  {label} {id:<3}{:>8.1} µs", t.elapsed().as_secs_f64() * 1e6 / 50.0);
+                }
+            }
+            let t = std::time::Instant::now();
+            for _ in 0..50 {
+                stats(a.luid, D3DKMT_QUERYSTATISTICS_ADAPTER, HANDLE::default(), 0);
+            }
+            println!("  adapter   {:>8.1} µs", t.elapsed().as_secs_f64() * 1e6 / 50.0);
+            let t = std::time::Instant::now();
+            for _ in 0..50 {
+                let mut p = D3DKMT_ADAPTER_PERFDATA::default();
+                query_info(a.handle, KMTQAITYPE_ADAPTERPERFDATA, &mut p);
+            }
+            println!("  perf data {:>8.1} µs", t.elapsed().as_secs_f64() * 1e6 / 50.0);
+        }
+    }
+
+    #[test]
     fn reads_adapters() {
         let Some(mut g) = Gpus::new() else { return };
         let info = g.info();
-        let a = g.sample(true);
-        let b = g.sample(true);
+        let a = g.sample(true, true);
+        let b = g.sample(true, false);
         assert_eq!(a.len(), info.len());
         for (x, y) in a.iter().zip(&b) {
             assert!(y.timestamp > x.timestamp);

@@ -69,7 +69,7 @@ struct Target1 {
 struct Models {
     cards: Rc<VecModel<CardData>>,
     insights: Rc<VecModel<InsightData>>,
-    rows: Rc<VecModel<ProcRowData>>,
+    rows: procs::RowsModel,
     columns: Rc<VecModel<ColumnData>>,
     column_on: Rc<VecModel<bool>>,
     details: Rc<VecModel<StatData>>,
@@ -93,7 +93,7 @@ impl Models {
         Self {
             cards: Rc::default(),
             insights: Rc::default(),
-            rows: Rc::default(),
+            rows: Default::default(),
             columns: Rc::default(),
             column_on: Rc::default(),
             details: Rc::default(),
@@ -286,12 +286,13 @@ pub fn run(p: Platform) -> Result<(), slint::PlatformError> {
 }
 
 fn initial_demand(st: &State, main: bool) -> Demand {
-    compute_demand(&st.s, st.page, main, st.s.compact.open)
+    compute_demand(&st.s, st.page, main, st.s.compact.open, matches!(st.device, DevKey::Gpu(_)))
 }
 
-fn compute_demand(s: &Settings, page: Page, main: bool, compact: bool) -> Demand {
+/// What to sample for what is on screen. `gpu_open`: the Performance page is showing a GPU.
+fn compute_demand(s: &Settings, page: Page, main: bool, compact: bool, gpu_open: bool) -> Demand {
     if !main && !compact && s.background == Background::Pause {
-        return Demand { processes: false, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, paused: true };
+        return Demand { processes: false, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, gpu_engines: false, paused: true };
     }
     let on_procs = main && page == Page::Processes;
     Demand {
@@ -301,6 +302,8 @@ fn compute_demand(s: &Settings, page: Page, main: bool, compact: bool) -> Demand
         process_gpu: on_procs && !s.reduced && (s.columns.contains(&Column::Gpu) || s.columns.contains(&Column::GpuEngine)),
         memory_detail: main && page == Page::Performance,
         sensors: !s.reduced && ((main && matches!(page, Page::Overview | Page::Performance)) || compact),
+        // Each engine has its own graph there. Elsewhere only the busiest engine is shown.
+        gpu_engines: main && page == Page::Performance && gpu_open,
         paused: false,
     }
 }
@@ -322,7 +325,7 @@ impl Ctrl {
         }
         app.set_cards(model(&self.m.cards));
         app.set_insights(model(&self.m.insights));
-        app.set_rows(model(&self.m.rows));
+        app.set_rows(self.m.rows.model());
         app.set_columns(model(&self.m.columns));
         app.set_column_on(model(&self.m.column_on));
         app.set_details(model(&self.m.details));
@@ -555,6 +558,7 @@ impl Ctrl {
                     st.device = k;
                 }
             }
+            c.update_demand();
             c.render_page()
         });
         cb!(c, app, on_toggle_per_core, | | {
@@ -865,7 +869,7 @@ impl Ctrl {
         let st = &mut *guard;
         st.table.rebuild(&st.s);
         let cx = CellContext { frame: &st.frame, mem_total: st.frame.mem.map_or(st.info.mem.total, |m| m.total), icons: &st.icons };
-        let (rows, rearranged) = st.table.view_rows(&st.s, &cx);
+        let rows = st.table.view_rows(&st.s, &cx);
         let (name_col, cols, total) = st.table.columns(&st.s, &st.frame);
         let summary = st.table.summary(&st.frame);
         let procs = st.table.selected_procs();
@@ -881,7 +885,7 @@ impl Ctrl {
             single.and_then(|p| Priority::from_base(p.base_priority)).and_then(|p| Priority::ALL.iter().position(|x| *x == p)).map_or(-1, |i| i as i32)
         };
         drop(guard);
-        procs::push_rows(&self.m.rows, rows, rearranged);
+        self.m.rows.push(rows);
         util::sync(&self.m.columns, cols);
         app.set_name_column(name_col);
         app.set_columns_width(total);
@@ -1808,7 +1812,7 @@ impl Ctrl {
     fn update_demand(&self) {
         let d = {
             let st = self.st.borrow();
-            compute_demand(&st.s, st.page, st.main_shown && !st.minimized, st.compact_shown)
+            compute_demand(&st.s, st.page, st.main_shown && !st.minimized, st.compact_shown, matches!(st.device, DevKey::Gpu(_)))
         };
         let changed = {
             let mut st = self.st.borrow_mut();
@@ -2254,31 +2258,40 @@ mod tests {
     fn hidden_and_paused_samples_nothing() {
         let mut s = Settings::default();
         s.background = Background::Pause;
-        let d = compute_demand(&s, Page::Overview, false, false);
+        let d = compute_demand(&s, Page::Overview, false, false, false);
         assert!(d.paused);
         // The compact monitor keeps sampling going, without processes.
-        let d = compute_demand(&s, Page::Overview, false, true);
+        let d = compute_demand(&s, Page::Overview, false, true, false);
         assert!(!d.paused && !d.processes);
     }
 
     #[test]
     fn process_extras_only_for_the_processes_page() {
         let s = Settings::default();
-        let d = compute_demand(&s, Page::Overview, true, false);
+        let d = compute_demand(&s, Page::Overview, true, false, false);
         assert!(d.processes && !d.windows && !d.services && !d.process_gpu);
-        let d = compute_demand(&s, Page::Processes, true, false);
+        let d = compute_demand(&s, Page::Processes, true, false, false);
         assert!(d.windows && d.services && d.process_gpu);
         let mut r = s.clone();
         r.reduced = true;
-        let d = compute_demand(&r, Page::Processes, true, false);
+        let d = compute_demand(&r, Page::Processes, true, false, false);
         assert!(!d.process_gpu && !d.sensors);
+    }
+
+    #[test]
+    fn every_gpu_engine_is_read_only_while_a_gpu_is_open() {
+        let s = Settings::default();
+        assert!(compute_demand(&s, Page::Performance, true, false, true).gpu_engines);
+        assert!(!compute_demand(&s, Page::Performance, true, false, false).gpu_engines, "the CPU or memory view");
+        assert!(!compute_demand(&s, Page::Overview, true, false, true).gpu_engines);
+        assert!(!compute_demand(&s, Page::Performance, false, true, true).gpu_engines, "hidden behind the compact monitor");
     }
 
     #[test]
     fn history_mode_drops_processes_while_hidden() {
         let mut s = Settings::default();
         s.background = Background::History;
-        let d = compute_demand(&s, Page::Processes, false, false);
+        let d = compute_demand(&s, Page::Processes, false, false, false);
         assert!(!d.processes && !d.paused);
     }
 

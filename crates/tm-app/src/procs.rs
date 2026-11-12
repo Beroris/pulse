@@ -1,6 +1,7 @@
 //! The process table: rows, cells, selection and keyboard movement. Pure state, no Slint windows,
 //! so the controller decides when to push it to the view.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -62,8 +63,6 @@ pub struct Table {
     /// The process whose details panel is open, and what was read about it.
     pub details: Option<ProcKey>,
     pub details_static: Option<(ProcKey, ProcDetails)>,
-    /// Ids of the rows currently in the view, to tell a refresh from a rearrangement.
-    shown: Vec<RowId>,
     /// While the pointer is over the rows, they keep their order instead of re-sorting each tick.
     pub hold: bool,
     order: Vec<RowId>,
@@ -280,18 +279,13 @@ impl Table {
         self.select_only(RowId::Proc(key));
     }
 
-    /// Rows for the view. Returns them and whether the arrangement changed since last time
-    /// (otherwise the caller updates rows in place).
-    pub fn view_rows(&mut self, s: &Settings, cx: &CellContext) -> (Vec<ProcRowData>, bool) {
-        let ids: Vec<RowId> = self.rows.iter().map(|r| r.id.clone()).collect();
-        let changed = ids != self.shown;
-        self.shown = ids;
+    /// Rows for the view, each with its cells. [`RowsModel::push`] puts the cells into the row.
+    pub fn view_rows(&self, s: &Settings, cx: &CellContext) -> Vec<(ProcRowData, Vec<CellData>)> {
         let status_col = s.columns.contains(&Column::Status);
-        let rows = self.rows.iter().map(|r| self.row_data(r, s, cx, status_col)).collect();
-        (rows, changed)
+        self.rows.iter().map(|r| self.row_data(r, s, cx, status_col)).collect()
     }
 
-    fn row_data(&self, r: &Row, s: &Settings, cx: &CellContext, status_col: bool) -> ProcRowData {
+    fn row_data(&self, r: &Row, s: &Settings, cx: &CellContext, status_col: bool) -> (ProcRowData, Vec<CellData>) {
         let mut d = ProcRowData {
             depth: r.depth as i32,
             expandable: r.expandable,
@@ -341,8 +335,7 @@ impl Table {
                 s.columns.iter().map(|&c| proc_cell(c, p, cx)).collect()
             }
         };
-        d.cells = ModelRc::new(VecModel::from(cells));
-        d
+        (d, cells)
     }
 
     pub fn columns(&self, s: &Settings, f: &Frame) -> (ColumnData, Vec<ColumnData>, f32) {
@@ -482,9 +475,9 @@ fn group_cell(c: Column, first: &ProcNow, a: &Agg, status: ProcStatus, same_user
     }
 }
 
-/// Whether two rows look the same, so an unchanged row isn't pushed to the view again.
-pub fn same_row(a: &ProcRowData, b: &ProcRowData) -> bool {
-    use slint::Model;
+/// Whether two rows look the same apart from their cells, so an unchanged row isn't pushed to
+/// the view again.
+fn same_row(a: &ProcRowData, b: &ProcRowData) -> bool {
     a.kind == b.kind
         && a.depth == b.depth
         && a.expandable == b.expandable
@@ -496,21 +489,56 @@ pub fn same_row(a: &ProcRowData, b: &ProcRowData) -> bool {
         && a.has_icon == b.has_icon
         && a.icon == b.icon
         && a.status == b.status
-        && a.cells.row_count() == b.cells.row_count()
-        && a.cells.iter().zip(b.cells.iter()).all(|(x, y)| x == y)
 }
 
-/// Pushes rows to the model: in place when only values changed, otherwise all at once.
-pub fn push_rows(model: &Rc<VecModel<ProcRowData>>, rows: Vec<ProcRowData>, rearranged: bool) {
-    use slint::Model;
-    if rearranged || model.row_count() != rows.len() {
-        model.set_vec(rows);
-        return;
+/// The table's rows as the view holds them.
+///
+/// Each position keeps its row and its cell model for as long as the table has that many rows. A
+/// refresh changes values in place, also when rows have changed places, so the view redraws the
+/// texts that differ instead of building rows again. Building a row is far more work than
+/// changing its text, and with the table sorted by CPU the rows change places on most refreshes.
+#[derive(Default)]
+pub struct RowsModel {
+    rows: Rc<VecModel<ProcRowData>>,
+    cells: RefCell<Vec<Rc<VecModel<CellData>>>>,
+}
+
+impl RowsModel {
+    pub fn model(&self) -> ModelRc<ProcRowData> {
+        ModelRc::from(self.rows.clone())
     }
-    for (i, r) in rows.into_iter().enumerate() {
-        if model.row_data(i).is_none_or(|old| !same_row(&old, &r)) {
-            model.set_row_data(i, r);
+
+    pub fn push(&self, rows: Vec<(ProcRowData, Vec<CellData>)>) {
+        use slint::Model;
+        let mut models = self.cells.borrow_mut();
+        let count = rows.len();
+        for (i, (mut row, cells)) in rows.into_iter().enumerate() {
+            if i < models.len() {
+                let model = &models[i];
+                if model.row_count() != cells.len() {
+                    model.set_vec(cells);
+                } else {
+                    for (k, cell) in cells.into_iter().enumerate() {
+                        if model.row_data(k).as_ref() != Some(&cell) {
+                            model.set_row_data(k, cell);
+                        }
+                    }
+                }
+                row.cells = ModelRc::from(model.clone());
+                if self.rows.row_data(i).is_none_or(|old| !same_row(&old, &row)) {
+                    self.rows.set_row_data(i, row);
+                }
+            } else {
+                let model = Rc::new(VecModel::from(cells));
+                row.cells = ModelRc::from(model.clone());
+                models.push(model);
+                self.rows.push(row);
+            }
         }
+        while self.rows.row_count() > count {
+            self.rows.remove(self.rows.row_count() - 1);
+        }
+        models.truncate(count);
     }
 }
 
@@ -618,5 +646,30 @@ mod tests {
         assert_eq!(proc_cell(Column::Cpu, &x, &cx).text, UNKNOWN);
         assert_eq!(proc_cell(Column::Gpu, &x, &cx).text, UNKNOWN, "GPU wasn't sampled");
         assert_eq!(proc_cell(Column::Disk, &x, &cx).text, UNKNOWN);
+    }
+
+    #[test]
+    fn a_refresh_changes_rows_in_place() {
+        use slint::Model;
+        let rows = RowsModel::default();
+        let row = |name: &str, cpu: &str| (ProcRowData { name: name.into(), ..Default::default() }, vec![CellData { text: cpu.into(), heat: 0.0 }]);
+        rows.push(vec![row("a", "1%"), row("b", "2%")]);
+        let model = rows.model();
+        let first_cells = model.row_data(0).unwrap().cells;
+
+        // The rows change places and one is added. Each position keeps its cell model, so the view
+        // only has new values to draw.
+        rows.push(vec![row("b", "3%"), row("a", "1%"), row("c", "0%")]);
+        assert_eq!(model.row_count(), 3);
+        let first = model.row_data(0).unwrap();
+        assert_eq!(first.name, "b");
+        assert!(first.cells == first_cells, "the same cell model");
+        assert_eq!(first.cells.row_data(0).unwrap().text, "3%");
+        assert_eq!(model.row_data(2).unwrap().name, "c");
+
+        rows.push(vec![row("c", "0%")]);
+        assert_eq!(model.row_count(), 1);
+        assert_eq!(model.row_data(0).unwrap().name, "c");
+        assert_eq!(model.row_data(0).unwrap().cells.row_data(0).unwrap().text, "0%");
     }
 }

@@ -51,7 +51,7 @@ The UI never calls the OS for monitoring data. It only reads the collector's lat
   - Memory: `GlobalMemoryStatusEx` and `GetPerformanceInfo`, plus PDH for the standby and modified lists and the pools.
   - Disks: `IOCTL_DISK_PERFORMANCE`, through a handle opened with no access rights and closed straight away.
   - Network: `GetIfEntry2`.
-  - GPU: D3DKMT statistics, the same source Windows Task Manager reads, plus DXGI for names and sizes.
+  - GPU: D3DKMT statistics, the same source Windows Task Manager reads, plus DXGI for names and sizes. Reading an engine is slow on some drivers, so engines that have been idle for a while are read every few seconds instead of every tick, unless the GPU view is open.
 - `meta.rs` reads paths, owners, version info and icons.
 - `control.rs` carries out actions:
   - End task posts `WM_CLOSE` to the program's windows. Force end is `TerminateProcess`.

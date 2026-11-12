@@ -249,7 +249,7 @@ impl Sampler for WinSampler {
             ..Default::default()
         };
         if let Some(g) = self.gpus.as_mut() {
-            raw.gpus = g.sample(req.sensors);
+            raw.gpus = g.sample(req.sensors, req.gpu_engines);
         }
         if req.sensors {
             raw.thermal = self.thermal();
@@ -310,13 +310,80 @@ mod tests {
         assert_eq!(zone_name("TZ00"), "TZ00");
     }
 
+    /// What each source costs per tick on this machine. Not a pass/fail test:
+    /// `cargo test --release -p tm-windows -- --ignored --nocapture source_costs`
+    #[test]
+    #[ignore]
+    fn source_costs() {
+        fn time(label: &str, mut f: impl FnMut()) {
+            const N: u32 = 200;
+            f();
+            let t = std::time::Instant::now();
+            for _ in 0..N {
+                f();
+            }
+            println!("{label:<34}{:>8.3} ms", t.elapsed().as_secs_f64() * 1000.0 / N as f64);
+        }
+        let mut s = WinSampler::new();
+        s.describe(true);
+        let all = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true, gpu_engines: true };
+        let hidden = SampleRequest { processes: true, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, gpu_engines: false };
+        s.sample(&all);
+        time("pdh collect", || {
+            s.pdh().map(|p| p.q.collect());
+        });
+        time("cpu", || {
+            s.cpu();
+        });
+        time("memory", || {
+            s.memory(false);
+        });
+        time("memory, detail", || {
+            s.memory(true);
+        });
+        time("disks", || {
+            s.disks.sample();
+        });
+        time("network", || {
+            s.nets.sample();
+        });
+        time("gpu", || {
+            s.gpus.as_mut().map(|g| g.sample(false, true));
+        });
+        time("gpu, sensors", || {
+            s.gpus.as_mut().map(|g| g.sample(true, true));
+        });
+        time("thermal zones", || {
+            s.thermal();
+        });
+        time("processes", || {
+            s.procs.sample();
+        });
+        let list = s.procs.sample().map(|(l, _)| l).unwrap_or_default();
+        time("per-process gpu", || {
+            s.gpus.as_mut().map(|g| g.sample_processes(&list));
+        });
+        time("windows", || {
+            top_windows();
+        });
+        time("service owners", || {
+            s.scm.as_ref().map(enum_service_owners);
+        });
+        time("whole sample: hidden", || {
+            s.sample(&hidden);
+        });
+        time("whole sample: everything", || {
+            s.sample(&all);
+        });
+    }
+
     #[test]
     fn samples_real_counters() {
         let mut s = WinSampler::new();
         let info = s.describe(true);
         assert!(info.cpu.logical > 0, "{:?}", info.cpu);
         assert!(info.mem.total > 0);
-        let req = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true };
+        let req = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true, gpu_engines: true };
         let raw = s.sample(&req);
         assert_eq!(raw.cpu.cores.len() as u32, info.cpu.logical);
         let procs = raw.processes.expect("process list");

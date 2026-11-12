@@ -2,7 +2,7 @@
 
 # Bero Task Manager
 
-A fast, quiet task manager for Windows. See what's using your CPU, memory, disk, GPU and network, end what's stuck, and tidy what starts with Windows, in a window that opens in about 60 ms and sits at around 0.1% CPU while you watch it.
+A fast, quiet task manager for Windows. See what's using your CPU, memory, disk, GPU and network, end what's stuck, and tidy what starts with Windows, in a window that opens in about 60 ms and uses around 0.1% of your CPU while you watch it.
 
 It's part of the Bero suite, next to Prism, Orbit and Spotlight: same font, same dark-first look.
 
@@ -69,11 +69,12 @@ Measured on the release build on Windows 11 (Ryzen 5 5600X, 16 GB). See [docs/PE
 
 | | |
 |---|---|
-| Download | 8.2 MB installer, 22.6 MB portable exe, no runtime needed |
+| Download | 7.5 MB installer, 17.4 MB portable exe, no runtime needed |
 | Start to window on screen | 62 ms (warm) |
-| Idle CPU, window open | 0.13–0.16% of the whole CPU |
+| Idle CPU, window open | 0.08–0.12% of the whole CPU |
+| Idle CPU, in the tray and still monitoring | 0.03% |
 | Idle CPU, paused in the tray | 0.00% |
-| Memory | 14–17 MB private working set, 45–50 MB working set |
+| Memory | 14–18 MB private, 44–48 MB working set |
 
 ## Build
 
