@@ -1,0 +1,206 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { Icon, Button, Card, Toggle, Segmented, Select, SettingRow, SectionTitle, Divider } from "widgets.slint";
+
+component Group inherits VerticalLayout {
+    in property <string> title;
+    spacing: 8px;
+    SectionTitle { text: root.title; }
+    Card {
+        VerticalLayout {
+            @children
+        }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    ScrollView {
+        content-width: self.visible-width;
+        content-height: content.preferred-height;
+        content := VerticalLayout {
+            width: min(parent.visible-width, 880px);
+            x: max(0px, (parent.visible-width - self.width) / 2);
+            padding: 28px;
+            padding-top: 24px;
+            spacing: 24px;
+            Text { text: "Settings"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
+
+            Group {
+                title: "Appearance";
+                SettingRow {
+                    title: "Theme";
+                    Segmented { label: "Theme"; options: ["Like Windows", "Dark", "Light"]; selected <=> App.theme-index; changed(i) => { App.setting-int("theme", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Accent colour";
+                    description: App.accent-system ? "Following the Windows accent colour." : "Your pick, adjusted so it stays readable on both themes.";
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Rectangle {
+                            width: 30px;
+                            height: 30px;
+                            border-radius: 15px;
+                            border-width: App.accent-system ? 2px : 1px;
+                            border-color: App.accent-system ? Theme.text : Theme.edge;
+                            background: Theme.raised;
+                            Text { text: "A"; color: Theme.secondary; font-size: Theme.small; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                            sta := TouchArea { mouse-cursor: pointer; clicked => { App.accent-system-picked(); } }
+                            if sta.has-hover: Tooltip { Text { text: "Windows accent colour"; color: Theme.text; font-size: Theme.small; } }
+                        }
+                        for s[i] in App.swatches: Rectangle {
+                            width: 30px;
+                            height: 30px;
+                            border-radius: 15px;
+                            background: s.color;
+                            border-width: s.selected ? 2px : 0px;
+                            border-color: Theme.text;
+                            accessible-role: button;
+                            accessible-label: "Accent colour " + (i + 1);
+                            accessible-action-default => { App.accent-picked(i); }
+                            TouchArea { mouse-cursor: pointer; clicked => { App.accent-picked(i); } }
+                        }
+                    }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Interface size";
+                    description: "On top of Windows' display scaling.";
+                    Select { label: "Interface size"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; selected <=> App.scale-index; changed(i) => { App.setting-int("scale", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Animations";
+                    Segmented { label: "Animations"; options: ["Like Windows", "On", "Off"]; selected <=> App.motion-index; changed(i) => { App.setting-int("motion", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Compact sidebar";
+                    description: "Show only icons in the sidebar.";
+                    Toggle { label: "Compact sidebar"; checked: App.sidebar-compact; toggled(v) => { App.setting-bool("sidebar", v); } }
+                }
+            }
+
+            Group {
+                title: "Monitoring";
+                SettingRow {
+                    title: "Refresh every";
+                    Segmented { label: "Refresh interval"; options: ["0.5 s", "1 s", "2 s", "5 s"]; selected <=> App.refresh-index; changed(i) => { App.setting-int("refresh", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Graph history";
+                    Segmented { label: "Graph history"; options: ["1 min", "2 min", "5 min", "10 min"]; selected <=> App.history-index; changed(i) => { App.setting-int("history", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "While the window is hidden";
+                    description: "Keeping history makes graphs and insights complete when you come back. Pausing uses next to no CPU.";
+                    Select { label: "While hidden"; options: ["Keep monitoring", "Keep history only", "Pause"]; selected <=> App.background-index; changed(i) => { App.setting-int("background", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Reduced mode";
+                    description: "Refresh at most every 2 seconds and skip per-process GPU and sensor readings.";
+                    Toggle { label: "Reduced mode"; checked <=> App.reduced; toggled(v) => { App.setting-bool("reduced", v); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Drawing";
+                    description: App.renderer-restart ? "Takes effect the next time the app starts." : "Software drawing uses the least memory. GPU drawing loads the graphics driver (about 150 MB more).";
+                    Segmented { label: "Drawing"; options: ["Software", "GPU"]; selected <=> App.renderer-index; changed(i) => { App.setting-int("renderer", i); } }
+                }
+            }
+
+            Group {
+                title: "Window";
+                SettingRow {
+                    title: "Open on";
+                    Select { label: "Start page"; options: ["Overview", "Processes", "Performance", "Startup", "Services"]; selected <=> App.start-page-index; changed(i) => { App.setting-int("start-page", i); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Start when I sign in";
+                    description: "Starts quietly in the tray.";
+                    Toggle { label: "Start when I sign in"; checked <=> App.autostart; toggled(v) => { App.setting-bool("autostart", v); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Remember window size and position";
+                    Toggle { label: "Remember window size and position"; checked <=> App.remember-window; toggled(v) => { App.setting-bool("remember-window", v); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Always on top";
+                    Toggle { label: "Always on top"; checked <=> App.always-on-top; toggled(v) => { App.setting-bool("always-on-top", v); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Tray icon";
+                    Toggle { label: "Tray icon"; checked <=> App.tray-icon; toggled(v) => { App.setting-bool("tray", v); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Closing the window keeps the app in the tray";
+                    Toggle { label: "Close to tray"; enabled: App.tray-icon; checked <=> App.close-to-tray; toggled(v) => { App.setting-bool("close-to-tray", v); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Minimizing hides the window to the tray";
+                    Toggle { label: "Minimize to tray"; enabled: App.tray-icon; checked <=> App.minimize-to-tray; toggled(v) => { App.setting-bool("minimize-to-tray", v); } }
+                }
+            }
+
+            Group {
+                title: "Compact monitor";
+                SettingRow {
+                    title: "Show";
+                    description: "The small always-on-top window (Ctrl+M).";
+                    HorizontalLayout {
+                        spacing: 6px;
+                        for m[i] in ["CPU", "Memory", "GPU", "Disk", "Network"]: Rectangle {
+                            height: 30px;
+                            width: mt.preferred-width + 22px;
+                            border-radius: 15px;
+                            background: App.compact-metrics[i] ? Theme.accent-soft : Theme.raised;
+                            border-width: App.compact-metrics[i] ? 1px : 0px;
+                            border-color: Theme.accent;
+                            accessible-role: checkbox;
+                            accessible-checked: App.compact-metrics[i];
+                            accessible-label: m;
+                            mt := Text { text: m; color: App.compact-metrics[i] ? Theme.accent : Theme.secondary; font-size: Theme.small; font-weight: 500; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: pointer; clicked => { App.setting-int("compact-metric", i); } }
+                        }
+                    }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Clicks pass through";
+                    description: "The monitor ignores the mouse. Turn this off from the tray menu.";
+                    Toggle { label: "Clicks pass through"; checked <=> App.compact-click-through; toggled(v) => { App.setting-bool("click-through", v); } }
+                }
+            }
+
+            Group {
+                title: "About";
+                SettingRow {
+                    title: "Bero Task Manager " + App.version;
+                    description: "Free software under the GNU GPL, version 3.";
+                    Button { text: "Source"; kind: 0; clicked => { App.open-url("https://github.com/Beroris/task-manager"); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Settings file";
+                    description: App.settings-path;
+                    Button { text: "Open"; icon: Icons.folder; clicked => { App.open-settings-file(); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Diagnostics";
+                    description: App.diagnostics;
+                }
+            }
+        }
+    }
+}

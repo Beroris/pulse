@@ -1,0 +1,194 @@
+import { GraphData, StatData, CardData, InsightData, CellData, ProcRowData, ColumnData, DeviceData, PerfGraph, Segment, StartupRow, ServiceRow, Swatch } from "types.slint";
+
+// Everything the main window shows and every action it can take. The controller fills the `in`
+// properties and handles the callbacks; views only bind to this.
+export global App {
+    // ─── Shell ───
+    in-out property <int> page: 0;
+    in-out property <bool> sidebar-compact: false;
+    in property <bool> elevated;
+    in property <string> version;
+    in property <string> machine;
+    callback navigate(int);
+    callback toggle-sidebar();
+    callback open-compact();
+    callback restart-elevated();
+
+    // ─── Overview ───
+    in property <[CardData]> cards;
+    in property <[InsightData]> insights;
+    in property <string> overview-note;
+    callback card-clicked(string);
+    callback insight-action(string);
+
+    // ─── Processes ───
+    in property <[ColumnData]> columns;
+    in property <ColumnData> name-column;
+    // Sum of the widths of every column but Name.
+    in property <length> columns-width;
+    in property <[ProcRowData]> rows;
+    in-out property <string> search;
+    in property <string> process-summary;
+    in-out property <int> view-mode;
+    in-out property <bool> friendly-names: true;
+    in property <[string]> column-choices;
+    in property <[bool]> column-on;
+    in property <int> selection-count;
+    in property <bool> selection-can-end;
+    in property <bool> selection-has-path;
+    in property <bool> selection-has-services;
+    in property <bool> selection-is-group;
+    in property <int> selection-priority: -1;
+    in-out property <length> table-scroll;
+    in-out property <length> table-visible-height;
+    in property <length> table-row-height: 32px;
+    callback search-edited(string);
+    callback view-changed(int);
+    callback friendly-changed(bool);
+    callback sort-by(int);
+    callback column-toggled(int);
+    callback column-resized(int, length);
+    callback row-pressed(int, bool, bool);
+    callback row-context(int);
+    callback row-activated(int);
+    callback row-toggle(int);
+    callback move-selection(int, bool);
+    callback expand-selected(bool);
+    callback select-all();
+    // The pointer entered or left the rows.
+    callback table-hover(bool);
+    callback end-selected();
+    callback force-end-selected();
+    callback set-priority(int);
+    callback copy(int);
+    callback open-location();
+    callback file-properties();
+    callback go-to-services();
+    callback show-details();
+
+    // Details panel
+    in property <bool> details-open;
+    in property <string> details-title;
+    in property <string> details-subtitle;
+    in property <image> details-icon;
+    in property <bool> details-has-icon;
+    in property <[StatData]> details;
+    callback close-details();
+
+    // ─── Performance ───
+    in property <[DeviceData]> devices;
+    in-out property <int> device: 0;
+    in property <string> perf-title;
+    in property <string> perf-subtitle;
+    in property <[PerfGraph]> perf-graphs;
+    in property <bool> perf-is-cpu;
+    in property <bool> perf-per-core;
+    in property <[GraphData]> perf-cores;
+    in property <[StatData]> perf-live;
+    in property <[StatData]> perf-static;
+    in property <[Segment]> perf-segments;
+    in property <string> perf-note;
+    callback device-selected(int);
+    callback toggle-per-core();
+
+    // ─── Startup ───
+    in property <[StartupRow]> startup-rows;
+    in property <string> startup-summary;
+    in property <bool> startup-loading;
+    in-out property <string> startup-search;
+    in property <int> startup-selected: -1;
+    in property <string> startup-name;
+    in property <string> startup-command;
+    in property <string> startup-path;
+    in property <string> startup-how;
+    in property <string> startup-publisher;
+    in property <string> startup-source;
+    in property <bool> startup-enabled;
+    in property <bool> startup-missing;
+    in property <bool> startup-needs-admin;
+    callback startup-search-edited(string);
+    callback startup-select(int);
+    callback startup-toggle(int, bool);
+    callback startup-open-location();
+    callback startup-properties();
+    callback startup-refresh();
+
+    // ─── Services ───
+    in property <[ServiceRow]> service-rows;
+    in property <string> services-summary;
+    in property <bool> services-loading;
+    in-out property <string> services-search;
+    in-out property <int> services-filter;
+    in property <int> service-selected: -1;
+    in property <string> service-name;
+    in property <string> service-display;
+    in property <string> service-description;
+    in property <string> service-status;
+    in property <bool> service-running;
+    in property <bool> service-can-stop;
+    in property <int> service-start-index: -1;
+    in property <bool> service-start-choosable;
+    in property <[StatData]> service-facts;
+    in property <string> service-warning;
+    in property <bool> service-busy;
+    callback services-search-edited(string);
+    callback services-filter-changed(int);
+    callback service-select(int);
+    callback service-start();
+    callback service-stop();
+    callback service-restart();
+    callback service-set-start(int);
+    callback service-go-to-process();
+    callback services-refresh();
+
+    // ─── Settings ───
+    in-out property <int> theme-index;
+    in-out property <int> motion-index;
+    in-out property <int> scale-index;
+    in-out property <int> refresh-index;
+    in-out property <int> history-index;
+    in-out property <int> background-index;
+    in-out property <int> renderer-index;
+    in-out property <int> start-page-index;
+    in-out property <bool> reduced;
+    in-out property <bool> remember-window;
+    in-out property <bool> always-on-top;
+    in-out property <bool> tray-icon;
+    in-out property <bool> close-to-tray;
+    in-out property <bool> minimize-to-tray;
+    in-out property <bool> autostart;
+    in-out property <bool> compact-click-through;
+    in-out property <[bool]> compact-metrics;
+    in property <[Swatch]> swatches;
+    in property <bool> accent-system;
+    in property <string> settings-path;
+    in property <string> diagnostics;
+    in property <bool> renderer-restart;
+    callback setting-int(string, int);
+    callback setting-bool(string, bool);
+    callback accent-picked(int);
+    callback accent-system-picked();
+    callback open-settings-file();
+    callback open-url(string);
+
+    // ─── Dialog ───
+    in property <bool> dialog-open;
+    in property <string> dialog-title;
+    in property <string> dialog-body;
+    in property <[string]> dialog-lines;
+    in property <string> dialog-confirm;
+    in property <string> dialog-cancel: "Cancel";
+    in property <bool> dialog-danger;
+    in property <bool> dialog-shield;
+    callback dialog-confirmed();
+    callback dialog-cancelled();
+
+    // ─── Notice (bottom of the window, fades on its own) ───
+    in property <string> notice;
+    in property <int> notice-kind;
+    in property <bool> notice-visible;
+    callback notice-dismissed();
+
+    // Keyboard shortcuts that work from anywhere in the window.
+    callback shortcut(string);
+}

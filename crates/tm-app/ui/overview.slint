@@ -1,0 +1,142 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { CardData } from "types.slint";
+import { Icon, Card, Graph, Meter, Button, SectionTitle } from "widgets.slint";
+
+component MetricCard inherits Card {
+    in property <CardData> data;
+    callback clicked;
+    property <bool> clickable: data.key != "uptime" && data.key != "procs" && data.available;
+    background: ta.has-hover && clickable ? Theme.card.mix(Theme.text, 0.96) : Theme.card;
+    accessible-role: button;
+    accessible-label: data.title + ": " + data.value + ". " + data.sub;
+    accessible-action-default => { if clickable { clicked(); } }
+    animate background { duration: Theme.quick; }
+    VerticalLayout {
+        padding: 16px;
+        padding-bottom: 12px;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 8px;
+            Icon { d: root.data.icon; size: 15px; color: Theme.secondary; y: (parent.height - self.height) / 2; }
+            Text { text: root.data.title; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            if root.clickable: Icon { d: Icons.chevron-right; size: 14px; color: ta.has-hover ? Theme.secondary : Theme.tertiary; y: (parent.height - self.height) / 2; }
+        }
+        Rectangle { height: 4px; }
+        Text {
+            text: root.data.available ? root.data.value : "Not available";
+            color: root.data.available ? Theme.text : Theme.tertiary;
+            font-size: root.data.available ? Theme.figure : Theme.heading;
+            font-weight: 600;
+            overflow: elide;
+        }
+        Text { text: root.data.sub; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+        Rectangle { vertical-stretch: 1; min-height: 6px; }
+        if root.data.graph.width > 0: Graph {
+            height: 44px;
+            data: root.data.graph;
+            data2: root.data.graph2;
+            second: root.data.second;
+            framed: false;
+            grid: false;
+            ink: root.data.level >= 0 ? Theme.meter(root.data.level) : Theme.accent;
+        }
+        if root.data.graph.width <= 0 && root.data.level >= 0: Meter { value: root.data.level; }
+    }
+    ta := TouchArea {
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => { if root.clickable { root.clicked(); } }
+    }
+}
+
+component InsightItem inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> action;
+    in property <int> severity;
+    callback act;
+    min-height: lay.preferred-height;
+    border-radius: Theme.radius-small;
+    background: Theme.raised;
+    lay := HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 14px;
+            background: (root.severity == 1 ? Theme.warning : Theme.accent).with-alpha(0.16);
+            Icon { d: root.severity == 1 ? Icons.warning : Icons.info; size: 15px; color: root.severity == 1 ? Theme.warning : Theme.accent; }
+        }
+        VerticalLayout {
+            spacing: 1px;
+            horizontal-stretch: 1;
+            Text { text: root.title; color: Theme.text; font-size: Theme.body; font-weight: 600; wrap: word-wrap; }
+            Text { text: root.detail; color: Theme.secondary; font-size: Theme.small; wrap: word-wrap; }
+        }
+        if root.action != "": VerticalLayout {
+            alignment: center;
+            Button { text: root.action; kind: 3; clicked => { root.act(); } }
+        }
+    }
+}
+
+export component OverviewPage inherits Rectangle {
+    property <length> gap: 12px;
+    property <int> cols: max(1, floor((self.width - 56px + gap) / (232px + gap)));
+    property <length> card-w: (self.width - 56px - gap * (cols - 1)) / cols;
+    property <length> card-h: 156px;
+    property <int> card-rows: ceil(App.cards.length / cols);
+    ScrollView {
+        content-width: self.visible-width;
+        content-height: content.preferred-height;
+        content := VerticalLayout {
+            width: root.width;
+            padding: 28px;
+            padding-top: 24px;
+            spacing: 18px;
+            VerticalLayout {
+                spacing: -2px;
+                Text { text: "Overview"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
+                Text { text: App.machine; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+            }
+            Rectangle {
+                height: root.card-rows * (root.card-h + root.gap) - root.gap;
+                for c[i] in App.cards: MetricCard {
+                    x: mod(i, root.cols) * (root.card-w + root.gap);
+                    y: floor(i / root.cols) * (root.card-h + root.gap);
+                    width: root.card-w;
+                    height: root.card-h;
+                    data: c;
+                    clicked => { App.card-clicked(c.key); }
+                }
+            }
+            Card {
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        SectionTitle { text: "Insights"; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: App.insights.length == 0 ? "" : App.insights.length + (App.insights.length == 1 ? " item" : " items"); color: Theme.tertiary; font-size: Theme.small; vertical-alignment: center; }
+                    }
+                    if App.insights.length == 0: HorizontalLayout {
+                        spacing: 10px;
+                        padding-top: 2px;
+                        padding-bottom: 4px;
+                        Icon { d: Icons.check; color: Theme.good; size: 16px; y: (parent.height - self.height) / 2; }
+                        Text { text: App.overview-note; color: Theme.secondary; font-size: Theme.body; wrap: word-wrap; vertical-alignment: center; }
+                    }
+                    for n in App.insights: InsightItem {
+                        title: n.title;
+                        detail: n.detail;
+                        action: n.action;
+                        severity: n.severity;
+                        act => { App.insight-action(n.id); }
+                    }
+                }
+            }
+        }
+    }
+}

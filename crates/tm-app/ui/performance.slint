@@ -1,0 +1,234 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { DeviceData, PerfGraph, StatData, Segment } from "types.slint";
+import { Icon, Card, Graph, Button, SectionTitle, Divider } from "widgets.slint";
+
+component DeviceItem inherits Rectangle {
+    in property <DeviceData> data;
+    in property <bool> active;
+    callback clicked;
+    height: 64px;
+    border-radius: Theme.radius-small;
+    background: active ? Theme.selection : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: tab;
+    accessible-label: data.title + " " + data.value;
+    accessible-item-selected: active;
+    accessible-action-default => { clicked(); }
+    animate background { duration: Theme.quick; }
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 10px;
+        Graph {
+            width: 64px;
+            data: root.data.graph;
+            data2: root.data.graph2;
+            second: root.data.second;
+            grid: false;
+            line: 1.2px;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: -2px;
+            horizontal-stretch: 1;
+            Text { text: root.data.title; color: Theme.text; font-size: Theme.body; font-weight: 600; overflow: elide; }
+            Text { text: root.data.sub; color: Theme.tertiary; font-size: Theme.tiny; overflow: elide; }
+            Text { text: root.data.value; color: Theme.secondary; font-size: Theme.small; overflow: elide; }
+        }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component GraphBlock inherits VerticalLayout {
+    in property <PerfGraph> g;
+    in property <length> graph-height;
+    spacing: 4px;
+    HorizontalLayout {
+        Text { text: root.g.title; color: Theme.secondary; font-size: Theme.small; overflow: elide; horizontal-stretch: 1; }
+        Text { text: root.g.right; color: Theme.tertiary; font-size: Theme.small; }
+    }
+    Graph {
+        height: root.graph-height;
+        data: root.g.graph;
+        data2: root.g.graph2;
+        second: root.g.second;
+    }
+    if root.g.legend != "": HorizontalLayout {
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle { width: 10px; height: 3px; y: (parent.height - self.height) / 2; border-radius: 1.5px; background: Theme.accent; }
+            Text { text: root.g.legend; color: Theme.secondary; font-size: Theme.tiny; }
+        }
+        if root.g.second: HorizontalLayout {
+            spacing: 6px;
+            Rectangle { width: 10px; height: 3px; y: (parent.height - self.height) / 2; border-radius: 1.5px; background: Theme.series2; }
+            Text { text: root.g.legend2; color: Theme.secondary; font-size: Theme.tiny; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+export component PerformancePage inherits Rectangle {
+    property <length> gap: 12px;
+    HorizontalLayout {
+        padding: 28px;
+        padding-top: 24px;
+        spacing: 20px;
+        VerticalLayout {
+            width: 248px;
+            spacing: 12px;
+            Text { text: "Performance"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
+            ScrollView {
+                content-width: self.visible-width;
+                content-height: list.preferred-height;
+                list := VerticalLayout {
+                    width: parent.visible-width;
+                    spacing: 2px;
+                    for d[i] in App.devices: DeviceItem {
+                        data: d;
+                        active: App.device == i;
+                        clicked => { App.device = i; App.device-selected(i); }
+                    }
+                }
+            }
+        }
+        Card {
+            horizontal-stretch: 1;
+            ScrollView {
+                content-width: self.visible-width;
+                content-height: detail.preferred-height;
+                detail := VerticalLayout {
+                    width: parent.visible-width;
+                    padding: 20px;
+                    spacing: 16px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: -2px;
+                            horizontal-stretch: 1;
+                            Text { text: App.perf-title; color: Theme.text; font-size: Theme.title; font-weight: 600; overflow: elide; }
+                            Text { text: App.perf-subtitle; color: Theme.secondary; font-size: Theme.small; overflow: elide; }
+                        }
+                        if App.perf-is-cpu: Button {
+                            y: (parent.height - self.height) / 2;
+                            text: App.perf-per-core ? "Show overall" : "Show each processor";
+                            kind: 0;
+                            clicked => { App.toggle-per-core(); }
+                        }
+                    }
+                    // Per-processor grid for the CPU.
+                    if App.perf-is-cpu && App.perf-per-core: Rectangle {
+                        property <int> n: App.perf-cores.length;
+                        property <int> cols: n <= 4 ? n : n <= 8 ? 4 : n <= 16 ? (self.width > 700px ? 8 : 4) : 8;
+                        property <int> rows: ceil(n / max(1, cols));
+                        property <length> cw: (self.width - root.gap * (cols - 1)) / max(1, cols);
+                        property <length> ch: rows <= 2 ? 120px : rows <= 3 ? 90px : 66px;
+                        height: rows * (ch + 6px) - 6px;
+                        for g[i] in App.perf-cores: Graph {
+                            x: mod(i, parent.cols) * (parent.cw + root.gap);
+                            y: floor(i / parent.cols) * (parent.ch + 6px);
+                            width: parent.cw;
+                            height: parent.ch;
+                            data: g;
+                            line: 1.2px;
+                        }
+                    }
+                    // Graphs: big ones take the full width, the rest go two to a row.
+                    Rectangle {
+                        property <length> half: (self.width - root.gap) / 2;
+                        property <int> bigs: App.perf-is-cpu && App.perf-per-core ? 0 : 1;
+                        property <length> big-h: 220px;
+                        property <length> small-h: 110px;
+                        property <int> smalls: App.perf-graphs.length - (App.perf-graphs.length > 0 && App.perf-graphs[0].big ? 1 : 0);
+                        property <bool> has-big: App.perf-graphs.length > 0 && App.perf-graphs[0].big && !(App.perf-is-cpu && App.perf-per-core);
+                        property <length> block-big: big-h + 44px;
+                        property <length> block-small: small-h + 44px;
+                        height: (has-big ? block-big + root.gap : 0px) + ceil(smalls / 2) * (block-small + root.gap);
+                        for g[i] in App.perf-graphs: GraphBlock {
+                            property <int> k: i - (App.perf-graphs[0].big ? 1 : 0);
+                            visible: !(g.big && App.perf-is-cpu && App.perf-per-core);
+                            x: g.big ? 0px : mod(k, 2) * (parent.half + root.gap);
+                            y: g.big ? 0px : (parent.has-big ? parent.block-big + root.gap : 0px) + floor(k / 2) * (parent.block-small + root.gap);
+                            width: g.big ? parent.width : parent.half;
+                            graph-height: g.big ? parent.big-h : parent.small-h;
+                            g: g;
+                        }
+                    }
+                    // Memory composition.
+                    if App.perf-segments.length > 0: VerticalLayout {
+                        spacing: 6px;
+                        Text { text: "Memory composition"; color: Theme.secondary; font-size: Theme.small; }
+                        HorizontalLayout {
+                            height: 26px;
+                            spacing: 2px;
+                            for s in App.perf-segments: Rectangle {
+                                horizontal-stretch: max(0.0001, s.frac);
+                                min-width: s.frac > 0.002 ? 3px : 0px;
+                                border-radius: 4px;
+                                background: s.tone == 0 ? Theme.accent : s.tone == 1 ? Theme.accent.with-alpha(0.55) : s.tone == 2 ? Theme.accent.with-alpha(0.25) : Theme.divider;
+                                sta := TouchArea { }
+                                if sta.has-hover: Tooltip { Text { text: s.label + ": " + s.value + "\n" + s.tip; color: Theme.text; font-size: Theme.small; } }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 16px;
+                            for s in App.perf-segments: HorizontalLayout {
+                                spacing: 6px;
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 3px;
+                                    background: s.tone == 0 ? Theme.accent : s.tone == 1 ? Theme.accent.with-alpha(0.55) : s.tone == 2 ? Theme.accent.with-alpha(0.25) : Theme.divider;
+                                }
+                                Text { text: s.label + " " + s.value; color: Theme.secondary; font-size: Theme.tiny; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                    Divider { }
+                    // Live figures, flowing in as many columns as fit.
+                    Rectangle {
+                        property <int> cols: max(2, floor((self.width + 16px) / (150px + 16px)));
+                        property <length> cw: (self.width - 16px * (cols - 1)) / cols;
+                        height: ceil(App.perf-live.length / cols) * 58px;
+                        for s[i] in App.perf-live: VerticalLayout {
+                            x: mod(i, parent.cols) * (parent.cw + 16px);
+                            y: floor(i / parent.cols) * 58px;
+                            width: parent.cw;
+                            height: 52px;
+                            alignment: start;
+                            spacing: 0px;
+                            Text { text: s.label; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+                            Text { text: s.value; color: Theme.text; font-size: 20px; font-weight: 600; overflow: elide; }
+                            if s.tip != "": TouchArea { }
+                        }
+                    }
+                    // Static details.
+                    if App.perf-static.length > 0: Rectangle {
+                        property <int> cols: self.width > 640px ? 2 : 1;
+                        property <length> cw: (self.width - 24px * (cols - 1)) / cols;
+                        property <int> per-col: ceil(App.perf-static.length / cols);
+                        height: per-col * 26px;
+                        for s[i] in App.perf-static: HorizontalLayout {
+                            x: floor(i / parent.per-col) * (parent.cw + 24px);
+                            y: mod(i, parent.per-col) * 26px;
+                            width: parent.cw;
+                            height: 26px;
+                            spacing: 12px;
+                            Text { text: s.label; color: Theme.tertiary; font-size: Theme.small; width: 42%; overflow: elide; vertical-alignment: center; }
+                            Text { text: s.value; color: Theme.text; font-size: Theme.small; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                        }
+                    }
+                    if App.perf-note != "": HorizontalLayout {
+                        spacing: 8px;
+                        Icon { d: Icons.info; size: 14px; color: Theme.tertiary; y: 1px; }
+                        Text { text: App.perf-note; color: Theme.tertiary; font-size: Theme.small; wrap: word-wrap; horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+}

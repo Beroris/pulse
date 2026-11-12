@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/tm-core", "crates/tm-app", "platforms/windows"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+repository = "https://github.com/Beroris/task-manager"
+
+[workspace.dependencies]
+tm-core = { path = "crates/tm-core" }
+tm-app = { path = "crates/tm-app" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The software renderer is the default: on this kind of app it uses ~7 MB where an OpenGL
+# driver can add 100+ MB. femtovg stays in as an opt-in "GPU rendering" setting.
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    "renderer-femtovg",
+    "accessibility",
+    "system-tray",
+    "raw-window-handle-06",
+    "unstable-winit-030",
+] }
+slint-build = "=1.18.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+# A panic on the collector thread is caught and reported; it must not take the UI down.
+panic = "unwind"
+
+[profile.dev]
+opt-level = 1
+
+# Text shaping and the software rasteriser are far too slow unoptimised.
+[profile.dev.package."*"]
+opt-level = 3

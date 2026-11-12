@@ -1,0 +1,92 @@
+import { Theme, Icons } from "theme.slint";
+import { CompactMetric } from "types.slint";
+import { Icon, Graph } from "widgets.slint";
+
+// The small always-on-top monitor. It has its own copy of the Theme global, which the controller
+// keeps in step with the main window's.
+export component CompactWindow inherits Window {
+    in property <[CompactMetric]> metrics;
+    in property <bool> click-through;
+    callback open-main();
+    callback dismiss();
+    callback drag();
+    title: "Bero Task Manager monitor";
+    icon: @image-url("../../../assets/icon.png");
+    no-frame: true;
+    always-on-top: true;
+    width: 216px;
+    height: max(48px, metrics.length * 46px + 14px);
+    background: Theme.card;
+    default-font-family: "Geist";
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.edge;
+    }
+    // Drag anywhere to move it; double-click opens the main window.
+    ta := TouchArea {
+        enabled: !root.click-through;
+        moved => {
+            if self.pressed && (abs(self.mouse-x - self.pressed-x) > 4px || abs(self.mouse-y - self.pressed-y) > 4px) {
+                root.drag();
+            }
+        }
+        double-clicked => { root.open-main(); }
+        VerticalLayout {
+            padding: 7px;
+            spacing: 0px;
+            for m in root.metrics: Rectangle {
+                height: 46px;
+                Graph {
+                    x: 6px;
+                    y: 24px;
+                    width: parent.width - 12px;
+                    height: 18px;
+                    data: m.graph;
+                    framed: false;
+                    grid: false;
+                    line: 1.2px;
+                }
+                HorizontalLayout {
+                    x: 6px;
+                    y: 2px;
+                    width: parent.width - 12px;
+                    height: 22px;
+                    spacing: 6px;
+                    Text { text: m.label; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    Text { text: m.value; color: m.level >= 0.9 ? Theme.danger : m.level >= 0.75 ? Theme.warning : Theme.text; font-size: Theme.body; font-weight: 600; vertical-alignment: center; }
+                }
+            }
+        }
+        if ta.has-hover: Rectangle {
+            x: parent.width - 26px;
+            y: 4px;
+            width: 22px;
+            height: 22px;
+            border-radius: 6px;
+            background: cta.has-hover ? Theme.raised : Theme.card;
+            Icon { d: Icons.close; size: 12px; color: Theme.secondary; }
+            cta := TouchArea { mouse-cursor: pointer; clicked => { root.dismiss(); } }
+        }
+    }
+}
+
+export component Tray inherits SystemTrayIcon {
+    in property <bool> compact-open;
+    in property <bool> click-through;
+    callback show-main();
+    callback toggle-compact();
+    callback toggle-click-through();
+    callback quit();
+    icon: @image-url("../../../assets/icon.png");
+    tooltip: "Bero Task Manager";
+    clicked => { root.show-main(); }
+    Menu {
+        MenuItem { title: "Open Bero Task Manager"; activated => { root.show-main(); } }
+        MenuSeparator { }
+        MenuItem { title: "Compact monitor"; checkable: true; checked: root.compact-open; activated => { root.toggle-compact(); } }
+        MenuItem { title: "Monitor ignores clicks"; checkable: true; checked: root.click-through; enabled: root.compact-open; activated => { root.toggle-click-through(); } }
+        MenuSeparator { }
+        MenuItem { title: "Quit"; activated => { root.quit(); } }
+    }
+}

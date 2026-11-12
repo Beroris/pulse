@@ -1,0 +1,146 @@
+import "../../../assets/fonts/GeistVariable.ttf";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { Icon, Button, Card } from "widgets.slint";
+import { Palette } from "std-widgets.slint";
+import { Sidebar } from "sidebar.slint";
+import { OverviewPage } from "overview.slint";
+import { ProcessesPage } from "processes.slint";
+import { PerformancePage } from "performance.slint";
+import { StartupPage } from "startup.slint";
+import { ServicesPage } from "services.slint";
+import { SettingsPage } from "settings.slint";
+export { CompactWindow, Tray } from "compact.slint";
+export { App, Theme, Icons }
+
+export component MainWindow inherits Window {
+    title: "Bero Task Manager";
+    icon: @image-url("../../../assets/icon.png");
+    min-width: 760px;
+    min-height: 480px;
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    background: Theme.background;
+    default-font-family: "Geist";
+    default-font-size: Theme.body;
+    forward-focus: keys;
+    always-on-top: App.always-on-top;
+
+    // Menus come from the widget style: keep them on the app's theme, not Windows'.
+    property <bool> dark: Theme.dark;
+    changed dark => { Palette.color-scheme = self.dark ? ColorScheme.dark : ColorScheme.light; }
+    init => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
+
+    public function focus-search() {
+        if App.page == 1 { processes.focus-search(); }
+    }
+    public function focus-table() {
+        if App.page == 1 { processes.focus-table(); }
+    }
+
+    keys := FocusScope {
+        // Shortcuts reach here when nothing inside handled them.
+        key-pressed(e) => {
+            if e.modifiers.control && !e.modifiers.alt {
+                if e.text == "1" { App.navigate(0); return accept; }
+                if e.text == "2" { App.navigate(1); return accept; }
+                if e.text == "3" { App.navigate(2); return accept; }
+                if e.text == "4" { App.navigate(3); return accept; }
+                if e.text == "5" { App.navigate(4); return accept; }
+                if e.text == "," { App.navigate(5); return accept; }
+                if e.text == "f" || e.text == "F" { App.navigate(1); processes.focus-search(); return accept; }
+                if e.text == "m" || e.text == "M" { App.open-compact(); return accept; }
+                if e.text == "b" || e.text == "B" { App.toggle-sidebar(); return accept; }
+            }
+            if e.text == Key.F5 { App.shortcut("refresh"); return accept; }
+            if e.text == Key.Escape && App.dialog-open { App.dialog-cancelled(); return accept; }
+            reject
+        }
+
+        HorizontalLayout {
+            Sidebar { }
+            Rectangle {
+                horizontal-stretch: 1;
+                if App.page == 0: OverviewPage { }
+                processes := ProcessesPage { visible: App.page == 1; }
+                if App.page == 2: PerformancePage { }
+                if App.page == 3: StartupPage { }
+                if App.page == 4: ServicesPage { }
+                if App.page == 5: SettingsPage { }
+            }
+        }
+    }
+
+    // Notice at the bottom: what an action did, or why it couldn't.
+    if App.notice-visible: Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 20px;
+        width: min(root.width - 80px, nl.preferred-width);
+        height: nl.preferred-height;
+        border-radius: Theme.radius-small;
+        background: Theme.dark ? #26262b : #ffffff;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-blur: 18px;
+        drop-shadow-color: #00000050;
+        accessible-role: text;
+        accessible-label: App.notice;
+        nl := HorizontalLayout {
+            padding: 10px;
+            padding-left: 14px;
+            spacing: 10px;
+            Icon { d: App.notice-kind == 0 ? Icons.check : App.notice-kind == 1 ? Icons.info : Icons.warning; color: App.notice-kind == 1 ? Theme.warning : App.notice-kind == 2 ? Theme.danger : Theme.accent; size: 15px; y: (parent.height - self.height) / 2; }
+            Text { text: App.notice; color: Theme.text; font-size: Theme.body; wrap: word-wrap; vertical-alignment: center; max-width: 560px; }
+            Rectangle {
+                width: 24px;
+                Icon { d: Icons.close; size: 12px; color: Theme.secondary; }
+                TouchArea { mouse-cursor: pointer; clicked => { App.notice-dismissed(); } }
+            }
+        }
+    }
+
+    // Confirmation dialog.
+    if App.dialog-open: Rectangle {
+        background: Theme.scrim;
+        TouchArea { }
+        Card {
+            x: (root.width - self.width) / 2;
+            y: max(20px, (root.height - self.height) / 2 - 20px);
+            width: min(root.width - 60px, 460px);
+            height: dl.preferred-height;
+            drop-shadow-blur: 30px;
+            drop-shadow-color: #00000070;
+            border-width: 1px;
+            border-color: Theme.edge;
+            dl := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+                Text { text: App.dialog-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                if App.dialog-body != "": Text { text: App.dialog-body; color: Theme.secondary; font-size: Theme.body; wrap: word-wrap; }
+                if App.dialog-lines.length > 0: Rectangle {
+                    border-radius: Theme.radius-small;
+                    background: Theme.raised;
+                    height: lines.preferred-height;
+                    lines := VerticalLayout {
+                        padding: 10px;
+                        spacing: 2px;
+                        for l in App.dialog-lines: Text { text: l; color: Theme.text; font-size: Theme.small; overflow: elide; }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button { text: App.dialog-cancel; clicked => { App.dialog-cancelled(); } }
+                    confirm := Button {
+                        text: App.dialog-confirm;
+                        icon: App.dialog-shield ? Icons.shield : "";
+                        kind: App.dialog-danger ? 2 : 1;
+                        clicked => { App.dialog-confirmed(); }
+                    }
+                }
+            }
+        }
+        init => { confirm.focus-me(); }
+    }
+}

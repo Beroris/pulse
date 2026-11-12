@@ -1,0 +1,132 @@
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { StartupRow } from "types.slint";
+import { Icon, IconButton, Button, SearchBox, Card, Badge, Toggle, Divider } from "widgets.slint";
+
+component StartupItem inherits Rectangle {
+    in property <StartupRow> data;
+    in property <int> index;
+    height: 52px;
+    border-radius: Theme.radius-small;
+    background: data.selected ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: data.name + (data.enabled ? ", enabled" : ", disabled");
+    accessible-item-selected: data.selected;
+    ta := TouchArea { clicked => { App.startup-select(root.index); } }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        Rectangle {
+            width: 24px;
+            if root.data.has-icon: Image { source: root.data.icon; width: 24px; height: 24px; image-rendering: smooth; }
+            if !root.data.has-icon: Rectangle { width: 22px; height: 22px; border-radius: 6px; background: Theme.raised; Icon { d: Icons.startup; size: 14px; color: Theme.tertiary; } }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: -2px;
+            horizontal-stretch: 1;
+            Text { text: root.data.name; color: root.data.enabled ? Theme.text : Theme.secondary; font-size: Theme.body; font-weight: 500; overflow: elide; }
+            Text { text: root.data.publisher != "" ? root.data.publisher : "Unknown publisher"; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+        }
+        if root.data.missing: Badge { text: "File missing"; kind: 2; y: (parent.height - self.height) / 2; }
+        if root.data.needs-admin: Icon { d: Icons.shield; size: 14px; color: Theme.tertiary; y: (parent.height - self.height) / 2; }
+        Text { text: root.data.source; color: Theme.tertiary; font-size: Theme.small; vertical-alignment: center; width: 150px; overflow: elide; }
+        Toggle {
+            y: (parent.height - self.height) / 2;
+            checked: root.data.enabled;
+            label: root.data.name;
+            toggled(on) => { App.startup-toggle(root.index, on); }
+        }
+    }
+}
+
+export component StartupPage inherits Rectangle {
+    VerticalLayout {
+        padding: 28px;
+        padding-top: 24px;
+        padding-bottom: 16px;
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                spacing: -2px;
+                Text { text: "Startup"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
+                Text { text: App.startup-summary; color: Theme.tertiary; font-size: Theme.small; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            SearchBox {
+                width: 260px;
+                y: (parent.height - self.height) / 2;
+                placeholder: "Search startup apps";
+                text <=> App.startup-search;
+                edited(t) => { App.startup-search-edited(t); }
+            }
+            IconButton { icon: Icons.restart; tip: "Refresh"; y: (parent.height - self.height) / 2; clicked => { App.startup-refresh(); } }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Card {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 6px;
+                    ListView {
+                        for r[i] in App.startup-rows: StartupItem { data: r; index: i; }
+                    }
+                }
+                if App.startup-loading: Text { y: 60px; width: parent.width; horizontal-alignment: center; text: "Reading startup entries…"; color: Theme.tertiary; }
+                if !App.startup-loading && App.startup-rows.length == 0: Text { y: 60px; width: parent.width; horizontal-alignment: center; text: App.startup-search == "" ? "Nothing starts with Windows from the places this app checks." : "Nothing matches."; color: Theme.tertiary; }
+            }
+            if App.startup-selected >= 0: Card {
+                width: 340px;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        VerticalLayout {
+                            spacing: -2px;
+                            horizontal-stretch: 1;
+                            Text { text: App.startup-name; color: Theme.text; font-size: Theme.heading; font-weight: 600; overflow: elide; }
+                            Text { text: App.startup-publisher; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+                        }
+                        IconButton { icon: Icons.close; tip: "Close"; clicked => { App.startup-select(-1); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Button {
+                            text: App.startup-enabled ? "Disable" : "Enable";
+                            kind: 1;
+                            icon: App.startup-needs-admin ? Icons.shield : "";
+                            clicked => { App.startup-toggle(App.startup-selected, !App.startup-enabled); }
+                        }
+                        Button { text: "Open location"; icon: Icons.folder; enabled: App.startup-path != "" && !App.startup-missing; clicked => { App.startup-open-location(); } }
+                    }
+                    Divider { }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        content-width: self.visible-width;
+                        content-height: facts.preferred-height;
+                        facts := VerticalLayout {
+                            width: parent.visible-width;
+                            spacing: 12px;
+                            padding-right: 8px;
+                            VerticalLayout { spacing: -1px; Text { text: "Status"; color: Theme.tertiary; font-size: Theme.tiny; } Text { text: App.startup-enabled ? "Enabled: starts when you sign in" : "Disabled: Windows skips it"; color: Theme.text; font-size: Theme.small; wrap: word-wrap; } }
+                            VerticalLayout { spacing: -1px; Text { text: "How it starts"; color: Theme.tertiary; font-size: Theme.tiny; } Text { text: App.startup-how; color: Theme.text; font-size: Theme.small; wrap: word-wrap; } }
+                            VerticalLayout { spacing: -1px; Text { text: "Command"; color: Theme.tertiary; font-size: Theme.tiny; } Text { text: App.startup-command; color: Theme.text; font-size: Theme.small; wrap: word-wrap; } }
+                            if App.startup-path != "": VerticalLayout { spacing: -1px; Text { text: "Program"; color: Theme.tertiary; font-size: Theme.tiny; } Text { text: App.startup-path; color: App.startup-missing ? Theme.warning : Theme.text; font-size: Theme.small; wrap: word-wrap; } }
+                            VerticalLayout { spacing: -1px; Text { text: "Registered in"; color: Theme.tertiary; font-size: Theme.tiny; } Text { text: App.startup-source; color: Theme.text; font-size: Theme.small; wrap: word-wrap; } }
+                            Text {
+                                text: "Disabling keeps the entry and only tells Windows to skip it, using the same switch as Windows Task Manager and Settings. Enable it again any time.";
+                                color: Theme.tertiary;
+                                font-size: Theme.small;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

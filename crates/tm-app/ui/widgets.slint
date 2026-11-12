@@ -1,0 +1,547 @@
+// Small building blocks, drawn to the suite's look rather than any stock style.
+
+import { Theme, Icons } from "theme.slint";
+import { GraphData } from "types.slint";
+
+export component Icon inherits Path {
+    in property <string> d;
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    in property <length> weight: 1.6px;
+    width: size;
+    height: size;
+    commands: d;
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: color;
+    stroke-width: weight;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    fill: transparent;
+}
+
+export component FocusRing inherits Rectangle {
+    in property <bool> show;
+    border-width: show ? 2px : 0px;
+    border-color: Theme.accent;
+    background: transparent;
+}
+
+// kind: 0 normal, 1 primary (accent), 2 danger, 3 quiet (no fill until hovered)
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <int> kind: 0;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback clicked;
+    public function focus-me() { fs.focus(); }
+    forward-focus: fs;
+    property <bool> keyed;
+    height: 32px;
+    min-width: lay.preferred-width;
+    border-radius: Theme.radius-small;
+    accessible-role: button;
+    accessible-label: text != "" ? text : tip;
+    accessible-enabled: enabled;
+    accessible-action-default => { if enabled { clicked(); } }
+    property <color> fill: kind == 1 ? Theme.accent : kind == 2 ? Theme.danger : kind == 3 ? transparent : Theme.raised;
+    property <color> ink: kind == 1 ? Theme.on-accent : kind == 2 ? (Theme.dark ? #1a0505 : #ffffff) : Theme.text;
+    background: !enabled ? (kind == 3 ? transparent : Theme.raised) : ta.pressed ? fill.mix(Theme.text, 0.82) : ta.has-hover ? (kind == 3 ? Theme.hover : fill.mix(Theme.text, 0.9)) : fill;
+    border-width: kind == 0 && !Theme.dark ? 1px : 0px;
+    border-color: Theme.edge;
+    opacity: enabled ? 1 : 0.45;
+    animate background { duration: Theme.quick; }
+    lay := HorizontalLayout {
+        padding-left: text == "" ? 8px : 13px;
+        padding-right: text == "" ? 8px : 14px;
+        spacing: 6px;
+        alignment: center;
+        if icon != "": Icon {
+            d: icon;
+            color: ink;
+            y: (parent.height - self.height) / 2;
+        }
+        if text != "": Text {
+            text: root.text;
+            color: ink;
+            font-size: Theme.body;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { fs.focus(); root.clicked(); }
+    }
+    fs := FocusScope {
+        // The touch area takes clicks; a focus scope on top would swallow the first one to take focus.
+        focus-on-click: false;
+        focus-gained(r) => { root.keyed = r == FocusReason.tab-navigation; }
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if e.text == Key.Return || e.text == " " { root.clicked(); return accept; }
+            reject
+        }
+    }
+    FocusRing { show: fs.has-focus && root.keyed; border-radius: root.border-radius; }
+    if tip != "" && ta.has-hover: Tooltip { Text { text: tip; color: Theme.text; font-size: Theme.small; } }
+}
+
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tip;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    in property <color> ink: Theme.secondary;
+    in property <length> size: 32px;
+    callback clicked;
+    forward-focus: fs;
+    property <bool> keyed;
+    width: size;
+    height: size;
+    border-radius: Theme.radius-small;
+    accessible-role: button;
+    accessible-label: tip;
+    accessible-action-default => { if enabled { clicked(); } }
+    background: active ? Theme.accent-soft : ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : transparent;
+    opacity: enabled ? 1 : 0.4;
+    animate background { duration: Theme.quick; }
+    Icon {
+        d: icon;
+        color: active ? Theme.accent : ta.has-hover ? Theme.text : root.ink;
+        size: 16px;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    fs := FocusScope {
+        // The touch area takes clicks; a focus scope on top would swallow the first one to take focus.
+        focus-on-click: false;
+        focus-gained(r) => { root.keyed = r == FocusReason.tab-navigation; }
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if e.text == Key.Return || e.text == " " { root.clicked(); return accept; }
+            reject
+        }
+    }
+    FocusRing { show: fs.has-focus && root.keyed; border-radius: root.border-radius; }
+    if tip != "" && ta.has-hover: Tooltip { Text { text: tip; color: Theme.text; font-size: Theme.small; } }
+}
+
+export component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback toggled(bool);
+    forward-focus: fs;
+    property <bool> keyed;
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    accessible-role: switch;
+    accessible-checkable: true;
+    accessible-checked: checked;
+    accessible-label: label;
+    accessible-action-default => { if enabled { checked = !checked; toggled(checked); } }
+    background: checked ? Theme.accent : Theme.dark ? #3a3a40 : #c8c8d0;
+    opacity: enabled ? 1 : 0.45;
+    animate background { duration: Theme.calm; }
+    knob := Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        y: 3px;
+        x: root.checked ? root.width - self.width - 3px : 3px;
+        background: root.checked ? Theme.on-accent : #ffffff;
+        animate x { duration: Theme.calm; easing: ease-out; }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { fs.focus(); root.checked = !root.checked; root.toggled(root.checked); }
+    }
+    fs := FocusScope {
+        // The touch area takes clicks; a focus scope on top would swallow the first one to take focus.
+        focus-on-click: false;
+        focus-gained(r) => { root.keyed = r == FocusReason.tab-navigation; }
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return { root.checked = !root.checked; root.toggled(root.checked); return accept; }
+            reject
+        }
+    }
+    FocusRing { show: fs.has-focus && root.keyed; border-radius: root.border-radius; x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected;
+    in property <string> label;
+    callback changed(int);
+    forward-focus: fs;
+    property <bool> keyed;
+    height: 32px;
+    border-radius: Theme.radius-small;
+    background: Theme.raised;
+    accessible-role: tab-list;
+    accessible-label: label;
+    min-width: lay.preferred-width;
+    lay := HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for o[i] in root.options: Rectangle {
+            border-radius: 6px;
+            background: i == root.selected ? (Theme.dark ? #34343a : #ffffff) : ota.has-hover ? Theme.hover : transparent;
+            drop-shadow-blur: i == root.selected && !Theme.dark ? 2px : 0px;
+            drop-shadow-color: #00000022;
+            accessible-role: tab;
+            accessible-label: o;
+            accessible-item-selected: i == root.selected;
+            accessible-action-default => { root.selected = i; root.changed(i); }
+            animate background { duration: Theme.quick; }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text {
+                    text: o;
+                    color: i == root.selected ? Theme.text : Theme.secondary;
+                    font-size: Theme.small;
+                    font-weight: i == root.selected ? 600 : 500;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+            ota := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { fs.focus(); root.selected = i; root.changed(i); }
+            }
+        }
+    }
+    fs := FocusScope {
+        // The touch area takes clicks; a focus scope on top would swallow the first one to take focus.
+        focus-on-click: false;
+        focus-gained(r) => { root.keyed = r == FocusReason.tab-navigation; }
+        key-pressed(e) => {
+            if e.text == Key.LeftArrow && root.selected > 0 { root.selected -= 1; root.changed(root.selected); return accept; }
+            if e.text == Key.RightArrow && root.selected < root.options.length - 1 { root.selected += 1; root.changed(root.selected); return accept; }
+            reject
+        }
+    }
+    FocusRing { show: fs.has-focus && root.keyed; border-radius: root.border-radius; }
+}
+
+export component SearchBox inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: "Search";
+    callback edited(string);
+    callback escape();
+    callback down();
+    forward-focus: input;
+    height: 34px;
+    border-radius: Theme.radius-small;
+    background: Theme.field;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.divider;
+    animate border-color { duration: Theme.quick; }
+    public function focus-input() { input.focus(); input.select-all(); }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 4px;
+        spacing: 8px;
+        Icon {
+            d: Icons.search;
+            color: Theme.tertiary;
+            y: (parent.height - self.height) / 2;
+        }
+        Rectangle {
+            input := TextInput {
+                text <=> root.text;
+                color: Theme.text;
+                font-size: Theme.body;
+                vertical-alignment: center;
+                single-line: true;
+                selection-background-color: Theme.accent-fill;
+                selection-foreground-color: Theme.text;
+                accessible-label: root.placeholder;
+                edited => { root.edited(self.text); }
+                key-pressed(e) => {
+                    if e.text == Key.Escape {
+                        if root.text != "" { root.text = ""; root.edited(""); return accept; }
+                        root.escape();
+                        return accept;
+                    }
+                    if e.text == Key.DownArrow { root.down(); return accept; }
+                    reject
+                }
+            }
+            if root.text == "": Text {
+                text: root.placeholder;
+                color: Theme.tertiary;
+                font-size: Theme.body;
+                vertical-alignment: center;
+                x: 0;
+                width: parent.width;
+            }
+        }
+        if root.text != "": IconButton {
+            icon: Icons.close;
+            tip: "Clear";
+            size: 26px;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.text = ""; root.edited(""); input.focus(); }
+        }
+    }
+}
+
+// A drop-down list of choices.
+export component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected;
+    in property <string> label;
+    callback changed(int);
+    forward-focus: fs;
+    property <bool> keyed;
+    height: 32px;
+    min-width: 140px;
+    border-radius: Theme.radius-small;
+    background: ta.has-hover ? Theme.raised.mix(Theme.text, 0.94) : Theme.raised;
+    border-width: Theme.dark ? 0px : 1px;
+    border-color: Theme.edge;
+    accessible-role: combobox;
+    accessible-label: label;
+    accessible-value: options[selected];
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 6px;
+        Text {
+            text: root.options[root.selected];
+            color: Theme.text;
+            font-size: Theme.body;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Icon {
+            d: Icons.chevron-down;
+            color: Theme.secondary;
+            size: 14px;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { fs.focus(); popup.show(); }
+    }
+    fs := FocusScope {
+        // The touch area takes clicks; a focus scope on top would swallow the first one to take focus.
+        focus-on-click: false;
+        focus-gained(r) => { root.keyed = r == FocusReason.tab-navigation; }
+        key-pressed(e) => {
+            if e.text == Key.UpArrow && root.selected > 0 { root.selected -= 1; root.changed(root.selected); return accept; }
+            if e.text == Key.DownArrow && root.selected < root.options.length - 1 { root.selected += 1; root.changed(root.selected); return accept; }
+            if e.text == " " || e.text == Key.Return { popup.show(); return accept; }
+            reject
+        }
+    }
+    FocusRing { show: fs.has-focus && root.keyed; border-radius: root.border-radius; }
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 180px);
+        Rectangle {
+            background: Theme.card;
+            border-radius: Theme.radius-small;
+            border-width: 1px;
+            border-color: Theme.edge;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000050;
+            VerticalLayout {
+                padding: 4px;
+                for o[i] in root.options: Rectangle {
+                    height: 30px;
+                    border-radius: 6px;
+                    background: ita.has-hover ? Theme.hover : i == root.selected ? Theme.accent-soft : transparent;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        Text {
+                            text: o;
+                            color: i == root.selected ? Theme.accent : Theme.text;
+                            font-size: Theme.body;
+                            vertical-alignment: center;
+                        }
+                    }
+                    ita := TouchArea {
+                        clicked => { root.selected = i; root.changed(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Card inherits Rectangle {
+    background: Theme.card;
+    border-radius: Theme.radius;
+    border-width: Theme.dark ? 0px : 1px;
+    border-color: Theme.divider;
+}
+
+export component Badge inherits Rectangle {
+    in property <string> text;
+    // 0 neutral, 1 accent, 2 warning, 3 danger, 4 good
+    in property <int> kind;
+    property <color> ink: kind == 1 ? Theme.accent : kind == 2 ? Theme.warning : kind == 3 ? Theme.danger : kind == 4 ? Theme.good : Theme.secondary;
+    height: 20px;
+    width: t.preferred-width + 14px;
+    border-radius: 10px;
+    background: ink.with-alpha(Theme.dark ? 0.16 : 0.12);
+    t := Text {
+        text: root.text;
+        color: root.ink;
+        font-size: Theme.tiny;
+        font-weight: 600;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+// A filled line graph. `data` paths come pre-built on a viewbox `width` wide and 100 high.
+export component Graph inherits Rectangle {
+    in property <GraphData> data;
+    in property <GraphData> data2;
+    in property <bool> second;
+    in property <color> ink: Theme.accent;
+    in property <color> ink2: Theme.series2;
+    in property <bool> grid: true;
+    in property <bool> framed: true;
+    in property <length> line: 1.5px;
+    clip: true;
+    border-radius: framed ? 8px : 0px;
+    background: framed ? (Theme.dark ? #151518 : #fbfbfd) : transparent;
+    border-width: framed ? 1px : 0px;
+    border-color: Theme.divider;
+    if grid: Rectangle {
+        for k in 3: Rectangle {
+            x: 0;
+            y: root.height * (k + 1) / 4;
+            width: root.width;
+            height: 1px;
+            background: Theme.divider.with-alpha(0.6);
+        }
+    }
+    if data.width > 0: Path {
+        width: 100%;
+        height: 100%;
+        commands: root.data.fill;
+        viewbox-width: root.data.width;
+        viewbox-height: 100;
+        fit: fill;
+        fill: @linear-gradient(180deg, root.ink.with-alpha(0.32) 0%, root.ink.with-alpha(0.04) 100%);
+        stroke-width: 0;
+    }
+    if data.width > 0: Path {
+        width: 100%;
+        height: 100%;
+        commands: root.data.line;
+        viewbox-width: root.data.width;
+        viewbox-height: 100;
+        fit: fill;
+        stroke: root.ink;
+        stroke-width: root.line;
+        stroke-line-join: round;
+        fill: transparent;
+    }
+    if second && data2.width > 0: Path {
+        width: 100%;
+        height: 100%;
+        commands: root.data2.line;
+        viewbox-width: root.data2.width;
+        viewbox-height: 100;
+        fit: fill;
+        stroke: root.ink2;
+        stroke-width: root.line;
+        stroke-line-join: round;
+        fill: transparent;
+    }
+}
+
+export component Meter inherits Rectangle {
+    in property <float> value;
+    in property <color> ink: Theme.meter(value);
+    height: 6px;
+    border-radius: 3px;
+    background: Theme.divider;
+    clip: true;
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.value, 0, 1);
+        height: parent.height;
+        border-radius: 3px;
+        background: root.ink;
+        animate width { duration: Theme.calm; }
+    }
+}
+
+export component Label inherits Text {
+    color: Theme.secondary;
+    font-size: Theme.small;
+    vertical-alignment: center;
+}
+
+export component SectionTitle inherits Text {
+    color: Theme.text;
+    font-size: Theme.heading;
+    font-weight: 600;
+}
+
+// A settings line: what it is, a sentence about it, and its control on the right.
+export component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    min-height: 56px;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 16px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 0px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.body;
+                font-weight: 500;
+                wrap: word-wrap;
+            }
+            if root.description != "": Text {
+                text: root.description;
+                color: Theme.secondary;
+                font-size: Theme.small;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            VerticalLayout {
+                alignment: center;
+                @children
+            }
+        }
+    }
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.divider;
+}

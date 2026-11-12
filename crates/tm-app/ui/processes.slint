@@ -1,0 +1,413 @@
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { ProcRowData, ColumnData, StatData } from "types.slint";
+import { Icon, IconButton, Button, SearchBox, Segmented, Card, Badge, FocusRing, Divider } from "widgets.slint";
+
+component HeaderCell inherits Rectangle {
+    in property <ColumnData> column;
+    in property <bool> first;
+    callback clicked;
+    callback resized(length);
+    height: 44px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: column.title;
+    property <length> start-width;
+    VerticalLayout {
+        padding-left: root.first ? 12px : 10px;
+        padding-right: 10px;
+        alignment: center;
+        spacing: -2px;
+        HorizontalLayout {
+            alignment: root.column.right ? end : start;
+            spacing: 4px;
+            Text {
+                text: root.column.title;
+                color: root.column.sort != 0 ? Theme.text : Theme.secondary;
+                font-size: Theme.small;
+                font-weight: root.column.sort != 0 ? 600 : 500;
+                overflow: elide;
+            }
+            if root.column.sort != 0: Icon {
+                d: root.column.sort == 2 ? Icons.chevron-down : Icons.chevron-up;
+                size: 11px;
+                weight: 2px;
+                color: Theme.accent;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        if root.column.sub != "": Text {
+            text: root.column.sub;
+            color: Theme.text;
+            font-size: Theme.small;
+            font-weight: 600;
+            horizontal-alignment: root.column.right ? right : left;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    // Drag the right edge to resize.
+    Rectangle {
+        x: parent.width - 6px;
+        width: 6px;
+        Rectangle { x: 5px; width: 1px; height: 16px; background: Theme.divider; }
+        rta := TouchArea {
+            mouse-cursor: col-resize;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down { root.start-width = root.width; }
+            }
+            moved => {
+                if self.pressed { root.resized(max(48px, root.start-width + self.mouse-x - self.pressed-x)); }
+            }
+        }
+    }
+}
+
+component ProcRow inherits Rectangle {
+    in property <ProcRowData> data;
+    in property <[ColumnData]> cols;
+    in property <length> name-width;
+    in property <int> index;
+    callback pressed(bool, bool);
+    callback context(length, length);
+    callback activated;
+    callback toggle;
+    height: App.table-row-height;
+    accessible-role: list-item;
+    accessible-label: data.name;
+    accessible-item-selected: data.selected;
+    accessible-expandable: data.expandable;
+    accessible-expanded: data.expanded;
+    background: data.selected ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
+    // Name
+    Rectangle {
+        x: 0;
+        width: root.name-width;
+        height: parent.height;
+        HorizontalLayout {
+            padding-left: 8px + root.data.depth * 20px;
+            padding-right: 8px;
+            spacing: 6px;
+            Rectangle {
+                width: 18px;
+                if root.data.expandable: Icon {
+                    d: root.data.expanded ? Icons.chevron-down : Icons.chevron-right;
+                    size: 13px;
+                    weight: 2px;
+                    color: cta.has-hover ? Theme.text : Theme.tertiary;
+                }
+                cta := TouchArea {
+                    enabled: root.data.expandable;
+                    clicked => { root.toggle(); }
+                }
+            }
+            if root.data.kind == 0: Text {
+                text: root.data.name;
+                color: Theme.accent;
+                font-size: Theme.small;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.data.kind != 0: Rectangle {
+                width: 18px;
+                if root.data.has-icon: Image {
+                    source: root.data.icon;
+                    width: 16px;
+                    height: 16px;
+                    image-rendering: smooth;
+                }
+                if !root.data.has-icon: Rectangle {
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 4px;
+                    border-width: 1.2px;
+                    border-color: Theme.tertiary;
+                }
+            }
+            if root.data.kind != 0: Text {
+                text: root.data.name;
+                color: root.data.dim ? Theme.tertiary : Theme.text;
+                font-size: Theme.body;
+                font-weight: root.data.kind == 1 ? 500 : 400;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            if root.data.count != "": Text {
+                text: root.data.count;
+                color: Theme.tertiary;
+                font-size: Theme.small;
+                vertical-alignment: center;
+            }
+            if root.data.status == 1: Badge { text: "Suspended"; kind: 0; y: (parent.height - self.height) / 2; }
+            if root.data.status == 2: Badge { text: "Not responding"; kind: 3; y: (parent.height - self.height) / 2; }
+        }
+    }
+    // Other columns
+    HorizontalLayout {
+        x: root.name-width;
+        width: parent.width - root.name-width;
+        spacing: 0px;
+        alignment: start;
+        for c[i] in root.data.cells: Rectangle {
+            width: i < root.cols.length ? root.cols[i].width : 80px;
+            background: c.heat > 0.01 ? Theme.accent.with-alpha(min(0.42, 0.06 + c.heat * 0.36)) : transparent;
+            Text {
+                x: 10px;
+                width: parent.width - 20px;
+                text: c.text;
+                color: root.data.dim ? Theme.tertiary : Theme.text;
+                font-size: Theme.body;
+                vertical-alignment: center;
+                horizontal-alignment: i < root.cols.length && root.cols[i].right ? right : left;
+                overflow: elide;
+            }
+        }
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.pressed(e.modifiers.control, e.modifiers.shift);
+            }
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.right {
+                root.context(self.mouse-x, self.mouse-y);
+            }
+        }
+        double-clicked => { root.activated(); }
+    }
+}
+
+component DetailsPanel inherits Card {
+    width: 340px;
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+        HorizontalLayout {
+            spacing: 10px;
+            if App.details-has-icon: Image { source: App.details-icon; width: 32px; height: 32px; image-rendering: smooth; y: (parent.height - self.height) / 2; }
+            VerticalLayout {
+                alignment: center;
+                spacing: -2px;
+                horizontal-stretch: 1;
+                Text { text: App.details-title; color: Theme.text; font-size: Theme.heading; font-weight: 600; overflow: elide; }
+                Text { text: App.details-subtitle; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+            }
+            IconButton { icon: Icons.close; tip: "Close"; clicked => { App.close-details(); } y: 0; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Open location"; icon: Icons.folder; enabled: App.selection-has-path; clicked => { App.open-location(); } }
+            Button { icon: Icons.copy; tip: "Copy details"; clicked => { App.copy(4); } }
+            Button { icon: Icons.info; tip: "File properties"; enabled: App.selection-has-path; clicked => { App.file-properties(); } }
+        }
+        Divider { }
+        ScrollView {
+            vertical-stretch: 1;
+            content-width: self.visible-width;
+            content-height: facts.preferred-height;
+            facts := VerticalLayout {
+                width: parent.visible-width;
+                spacing: 10px;
+                padding-right: 8px;
+                for d in App.details: VerticalLayout {
+                    spacing: -1px;
+                    Text { text: d.label; color: Theme.tertiary; font-size: Theme.tiny; font-weight: 500; }
+                    Text { text: d.value; color: Theme.text; font-size: Theme.small; wrap: word-wrap; }
+                }
+            }
+        }
+    }
+}
+
+export component ProcessesPage inherits Rectangle {
+    property <length> row-h: App.table-row-height;
+    property <length> name-w: max(App.name-column.width, table.width - App.columns-width - 14px);
+    property <length> content-w: name-w + App.columns-width;
+    property <bool> keyed;
+    public function focus-search() { search.focus-input(); }
+    public function focus-table() { fs.focus(); }
+    VerticalLayout {
+        padding: 28px;
+        padding-top: 24px;
+        padding-bottom: 16px;
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                spacing: -2px;
+                Text { text: "Processes"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
+                Text { text: App.process-summary; color: Theme.tertiary; font-size: Theme.small; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            search := SearchBox {
+                width: 300px;
+                y: (parent.height - self.height) / 2;
+                placeholder: "Search name, PID, publisher, path…";
+                text <=> App.search;
+                edited(t) => { App.search-edited(t); }
+                down => { fs.focus(); }
+            }
+            Segmented {
+                y: (parent.height - self.height) / 2;
+                label: "Group processes";
+                options: ["Grouped", "Tree", "List"];
+                selected <=> App.view-mode;
+                changed(i) => { App.view-changed(i); }
+            }
+            Button {
+                y: (parent.height - self.height) / 2;
+                text: App.selection-count > 1 ? "End " + App.selection-count + " tasks" : "End task";
+                icon: Icons.end;
+                enabled: App.selection-can-end;
+                clicked => { App.end-selected(); }
+            }
+            more := IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.more;
+                tip: "More";
+                clicked => { menu-area.show({ x: table.width - 260px, y: 8px }); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            table := Card {
+                clip: true;
+                menu-area := ContextMenuArea {
+                Menu {
+                    MenuItem { title: "End task"; enabled: App.selection-can-end; activated => { App.end-selected(); } }
+                    MenuItem { title: "Force end…"; enabled: App.selection-can-end; activated => { App.force-end-selected(); } }
+                    MenuSeparator { }
+                    Menu {
+                        title: "Set priority";
+                        enabled: App.selection-count == 1 && !App.selection-is-group;
+                        MenuItem { title: "Realtime"; checkable: true; checked: App.selection-priority == 0; activated => { App.set-priority(0); } }
+                        MenuItem { title: "High"; checkable: true; checked: App.selection-priority == 1; activated => { App.set-priority(1); } }
+                        MenuItem { title: "Above normal"; checkable: true; checked: App.selection-priority == 2; activated => { App.set-priority(2); } }
+                        MenuItem { title: "Normal"; checkable: true; checked: App.selection-priority == 3; activated => { App.set-priority(3); } }
+                        MenuItem { title: "Below normal"; checkable: true; checked: App.selection-priority == 4; activated => { App.set-priority(4); } }
+                        MenuItem { title: "Low"; checkable: true; checked: App.selection-priority == 5; activated => { App.set-priority(5); } }
+                    }
+                    MenuItem { title: "Go to services"; enabled: App.selection-has-services; activated => { App.go-to-services(); } }
+                    MenuSeparator { }
+                    MenuItem { title: "Details"; enabled: App.selection-count >= 1; activated => { App.show-details(); } }
+                    MenuItem { title: "Open file location"; enabled: App.selection-has-path; activated => { App.open-location(); } }
+                    MenuItem { title: "File properties"; enabled: App.selection-has-path; activated => { App.file-properties(); } }
+                    Menu {
+                        title: "Copy";
+                        enabled: App.selection-count >= 1;
+                        MenuItem { title: "Name"; activated => { App.copy(0); } }
+                        MenuItem { title: "PID"; activated => { App.copy(1); } }
+                        MenuItem { title: "Path"; enabled: App.selection-has-path; activated => { App.copy(2); } }
+                        MenuItem { title: "Command line"; activated => { App.copy(3); } }
+                        MenuItem { title: "All details"; activated => { App.copy(4); } }
+                    }
+                    MenuSeparator { }
+                    Menu {
+                        title: "Columns";
+                        for c[i] in App.column-choices: MenuItem {
+                            title: c;
+                            checkable: true;
+                            checked: App.column-on[i];
+                            activated => { App.column-toggled(i); }
+                        }
+                    }
+                    MenuItem {
+                        title: "Show descriptions instead of file names";
+                        checkable: true;
+                        checked: App.friendly-names;
+                        activated => { App.friendly-names = !App.friendly-names; App.friendly-changed(App.friendly-names); }
+                    }
+                }
+                    fs := FocusScope {
+                        focus-gained(r) => { root.keyed = r == FocusReason.tab-navigation; }
+                        key-pressed(e) => {
+                            if e.text == Key.UpArrow { App.move-selection(-1, e.modifiers.shift); return accept; }
+                            if e.text == Key.DownArrow { App.move-selection(1, e.modifiers.shift); return accept; }
+                            if e.text == Key.PageUp { App.move-selection(-max(1, floor(lv.visible-height / root.row-h) - 1), e.modifiers.shift); return accept; }
+                            if e.text == Key.PageDown { App.move-selection(max(1, floor(lv.visible-height / root.row-h) - 1), e.modifiers.shift); return accept; }
+                            if e.text == Key.Home { App.move-selection(-100000, e.modifiers.shift); return accept; }
+                            if e.text == Key.End { App.move-selection(100000, e.modifiers.shift); return accept; }
+                            if e.text == Key.RightArrow { App.expand-selected(true); return accept; }
+                            if e.text == Key.LeftArrow { App.expand-selected(false); return accept; }
+                            if e.text == Key.Return { App.show-details(); return accept; }
+                            if e.text == Key.Delete && e.modifiers.shift { App.force-end-selected(); return accept; }
+                            if e.text == Key.Delete { App.end-selected(); return accept; }
+                            if e.modifiers.control && (e.text == "a" || e.text == "A") { App.select-all(); return accept; }
+                            if e.modifiers.control && (e.text == "c" || e.text == "C") { App.copy(4); return accept; }
+                            if e.text == Key.Escape { search.focus-input(); return accept; }
+                            reject
+                        }
+                    }
+                    // Header, scrolled sideways with the rows.
+                    Rectangle {
+                        y: 0;
+                        height: 44px;
+                        clip: true;
+                        HorizontalLayout {
+                            x: lv.content-x;
+                            width: root.content-w;
+                            alignment: start;
+                            HeaderCell {
+                                width: root.name-w;
+                                first: true;
+                                column: App.name-column;
+                                clicked => { App.sort-by(0); }
+                                resized(w) => { App.column-resized(0, w); }
+                            }
+                            for c[i] in App.columns: HeaderCell {
+                                width: c.width;
+                                column: c;
+                                clicked => { App.sort-by(i + 1); }
+                                resized(w) => { App.column-resized(i + 1, w); }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.divider; }
+                    }
+                    // Reports when the pointer is over the rows, so they can hold still to be clicked.
+                    TouchArea {
+                        y: 44px;
+                        height: parent.height - 44px;
+                        changed has-hover => { App.table-hover(self.has-hover); }
+                        lv := ListView {
+                            content-width: max(self.visible-width, root.content-w);
+                            content-y <=> App.table-scroll;
+                            for r[i] in App.rows: ProcRow {
+                                data: r;
+                                cols: App.columns;
+                                name-width: root.name-w;
+                                index: i;
+                                pressed(ctrl, shift) => { fs.focus(); App.row-pressed(i, ctrl, shift); }
+                                context(x, y) => {
+                                    fs.focus();
+                                    App.row-context(i);
+                                    menu-area.show({ x: x + lv.content-x, y: 44px + i * root.row-h + lv.content-y + y });
+                                }
+                                activated => { App.row-activated(i); }
+                                toggle => { App.row-toggle(i); }
+                            }
+                        }
+                    }
+                    if App.rows.length == 0: Text {
+                        y: 80px;
+                        width: parent.width;
+                        horizontal-alignment: center;
+                        text: App.search == "" ? "Reading processes…" : "Nothing matches “" + App.search + "”.";
+                        color: Theme.tertiary;
+                        font-size: Theme.body;
+                    }
+                    FocusRing { show: fs.has-focus && root.keyed; border-radius: Theme.radius; }
+                }
+            }
+            if App.details-open: DetailsPanel { }
+        }
+    }
+    // The visible height goes back to the controller to keep the selection in view.
+    out property <length> visible-rows-height: lv.visible-height;
+    changed visible-rows-height => { App.table-visible-height = self.visible-rows-height; }
+    init => { App.table-visible-height = lv.visible-height; }
+}

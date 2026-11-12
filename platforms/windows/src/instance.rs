@@ -1,0 +1,105 @@
+//! One running copy: a named mutex says whether another is running, and a hidden message-only
+//! window lets a second launch (or the installer's `--quit`) hand it a command.
+
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::DataExchange::COPYDATASTRUCT;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WNDCLASSW,
+};
+use windows::core::PCWSTR;
+
+use crate::util::{IPC_CLASS, MUTEX_NAME, wide};
+
+/// Marks a WM_COPYDATA payload as one of ours.
+const MAGIC: usize = 0x4254_4d31; // "BTM1"
+
+/// Held for the life of the process; Windows releases it when the process ends.
+pub struct Instance(#[allow(dead_code)] HANDLE);
+
+/// Takes the single-instance mutex. `None` when another copy already holds it.
+pub fn claim() -> Option<Instance> {
+    let name = wide(MUTEX_NAME);
+    let h = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) }.ok()?;
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        return None;
+    }
+    Some(Instance(h))
+}
+
+fn find_running() -> Option<HWND> {
+    let class = wide(IPC_CLASS);
+    let h = unsafe { FindWindowExW(Some(HWND_MESSAGE), None, PCWSTR(class.as_ptr()), PCWSTR::null()) }.ok()?;
+    (!h.is_invalid()).then_some(h)
+}
+
+/// Sends `command` to the running copy. Returns its process ID when it was reached. Waits up to
+/// `wait_ms` for its window to appear, for a copy that is still starting.
+pub fn send(command: &str, wait_ms: u32) -> Option<u32> {
+    let mut waited = 0;
+    let h = loop {
+        if let Some(h) = find_running() {
+            break h;
+        }
+        if waited >= wait_ms {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        waited += 100;
+    };
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    if pid != 0 {
+        // Lets it bring its window to the front: Windows only allows that to the app the user is using.
+        unsafe {
+            let _ = AllowSetForegroundWindow(pid);
+        }
+    }
+    let bytes = command.as_bytes();
+    let data = COPYDATASTRUCT { dwData: MAGIC, cbData: bytes.len() as u32, lpData: bytes.as_ptr() as *mut _ };
+    let mut result = 0usize;
+    unsafe {
+        SendMessageTimeoutW(h, WM_COPYDATA, WPARAM(0), LPARAM(&data as *const _ as isize), SMTO_ABORTIFHUNG, 5000, Some(&mut result));
+    }
+    Some(pid)
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_COPYDATA && lp.0 != 0 {
+        let data = unsafe { &*(lp.0 as *const COPYDATASTRUCT) };
+        if data.dwData == MAGIC && !data.lpData.is_null() && data.cbData <= 4096 {
+            let bytes = unsafe { std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize) };
+            let command = String::from_utf8_lossy(bytes).into_owned();
+            tm_app::external_command(command);
+            return LRESULT(1);
+        }
+    }
+    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+}
+
+/// Creates the window that receives commands. On the UI thread, whose event loop delivers its
+/// messages.
+pub fn listen() {
+    let class = wide(IPC_CLASS);
+    unsafe {
+        let module = GetModuleHandleW(None).unwrap_or_default();
+        let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: module.into(), lpszClassName: PCWSTR(class.as_ptr()), ..Default::default() };
+        RegisterClassW(&wc);
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PCWSTR(class.as_ptr()),
+            PCWSTR::null(),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(module.into()),
+            None,
+        );
+    }
+}

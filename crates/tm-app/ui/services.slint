@@ -1,0 +1,152 @@
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { ServiceRow } from "types.slint";
+import { Icon, IconButton, Button, SearchBox, Segmented, Card, Badge, Select, Divider } from "widgets.slint";
+
+component ServiceItem inherits Rectangle {
+    in property <ServiceRow> data;
+    in property <int> index;
+    height: 34px;
+    background: data.selected ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: data.display + ", " + data.status;
+    accessible-item-selected: data.selected;
+    ta := TouchArea { clicked => { App.service-select(root.index); } }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        Text { text: root.data.name; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; width: 22%; overflow: elide; }
+        Text { text: root.data.display; color: Theme.text; font-size: Theme.body; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        HorizontalLayout {
+            width: 96px;
+            spacing: 6px;
+            Rectangle { width: 7px; height: 7px; border-radius: 3.5px; y: (parent.height - self.height) / 2; background: root.data.running ? Theme.good : Theme.tertiary.with-alpha(0.5); }
+            Text { text: root.data.status; color: root.data.running ? Theme.text : Theme.secondary; font-size: Theme.small; vertical-alignment: center; }
+        }
+        Text { text: root.data.start; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; width: 130px; overflow: elide; }
+        Text { text: root.data.pid; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; horizontal-alignment: right; width: 56px; }
+    }
+}
+
+export component ServicesPage inherits Rectangle {
+    VerticalLayout {
+        padding: 28px;
+        padding-top: 24px;
+        padding-bottom: 16px;
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                spacing: -2px;
+                Text { text: "Services"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
+                Text { text: App.services-summary; color: Theme.tertiary; font-size: Theme.small; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            SearchBox {
+                width: 260px;
+                y: (parent.height - self.height) / 2;
+                placeholder: "Search services";
+                text <=> App.services-search;
+                edited(t) => { App.services-search-edited(t); }
+            }
+            Segmented {
+                y: (parent.height - self.height) / 2;
+                label: "Show";
+                options: ["All", "Running", "Stopped"];
+                selected <=> App.services-filter;
+                changed(i) => { App.services-filter-changed(i); }
+            }
+            IconButton { icon: Icons.restart; tip: "Refresh"; y: (parent.height - self.height) / 2; clicked => { App.services-refresh(); } }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Card {
+                horizontal-stretch: 1;
+                clip: true;
+                VerticalLayout {
+                    HorizontalLayout {
+                        height: 36px;
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 10px;
+                        Text { text: "Name"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; width: 22%; }
+                        Text { text: "Display name"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: "Status"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; width: 96px; }
+                        Text { text: "Startup type"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; width: 130px; }
+                        Text { text: "PID"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; horizontal-alignment: right; width: 56px; }
+                    }
+                    Divider { }
+                    ListView {
+                        for r[i] in App.service-rows: ServiceItem { data: r; index: i; }
+                    }
+                }
+                if App.services-loading && App.service-rows.length == 0: Text { y: 80px; width: parent.width; horizontal-alignment: center; text: "Reading services…"; color: Theme.tertiary; }
+            }
+            if App.service-selected >= 0: Card {
+                width: 360px;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        VerticalLayout {
+                            spacing: -2px;
+                            horizontal-stretch: 1;
+                            Text { text: App.service-display; color: Theme.text; font-size: Theme.heading; font-weight: 600; wrap: word-wrap; }
+                            Text { text: App.service-name + " · " + App.service-status; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+                        }
+                        IconButton { icon: Icons.close; tip: "Close"; clicked => { App.service-select(-1); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Button { text: "Start"; icon: Icons.play; enabled: !App.service-running && !App.service-busy; clicked => { App.service-start(); } }
+                        Button { text: "Stop"; icon: Icons.stop; enabled: App.service-running && App.service-can-stop && !App.service-busy; clicked => { App.service-stop(); } }
+                        Button { text: "Restart"; icon: Icons.restart; enabled: App.service-running && App.service-can-stop && !App.service-busy; clicked => { App.service-restart(); } }
+                    }
+                    if App.service-start-choosable: HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Startup type"; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; }
+                        Select {
+                            horizontal-stretch: 1;
+                            label: "Startup type";
+                            options: ["Automatic", "Automatic (delayed)", "Manual", "Disabled"];
+                            selected: max(0, App.service-start-index);
+                            changed(i) => { App.service-set-start(i); }
+                        }
+                    }
+                    if App.service-warning != "": Rectangle {
+                        border-radius: Theme.radius-small;
+                        background: Theme.warning.with-alpha(0.12);
+                        min-height: wl.preferred-height;
+                        wl := HorizontalLayout {
+                            padding: 10px;
+                            spacing: 8px;
+                            Icon { d: Icons.warning; size: 15px; color: Theme.warning; }
+                            Text { text: App.service-warning; color: Theme.text; font-size: Theme.small; wrap: word-wrap; horizontal-stretch: 1; }
+                        }
+                    }
+                    Divider { }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        content-width: self.visible-width;
+                        content-height: facts.preferred-height;
+                        facts := VerticalLayout {
+                            width: parent.visible-width;
+                            spacing: 12px;
+                            padding-right: 8px;
+                            if App.service-description != "": Text { text: App.service-description; color: Theme.secondary; font-size: Theme.small; wrap: word-wrap; }
+                            for f in App.service-facts: VerticalLayout {
+                                spacing: -1px;
+                                Text { text: f.label; color: Theme.tertiary; font-size: Theme.tiny; }
+                                Text { text: f.value; color: Theme.text; font-size: Theme.small; wrap: word-wrap; }
+                            }
+                            if App.service-running: Button { text: "Go to process"; icon: Icons.processes; kind: 3; clicked => { App.service-go-to-process(); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

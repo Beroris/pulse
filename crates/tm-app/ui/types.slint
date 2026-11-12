@@ -1,0 +1,139 @@
+// Data the controller hands to the views. Everything is pre-formatted text: views never format numbers.
+
+export struct GraphData {
+    line: string,
+    fill: string,
+    // Viewbox width; 0 means "nothing to draw yet".
+    width: float,
+}
+
+export struct StatData {
+    label: string,
+    value: string,
+    tip: string,
+}
+
+// Overview
+export struct CardData {
+    key: string,
+    title: string,
+    value: string,
+    sub: string,
+    icon: string,
+    // 0..1 drives the meter and its colour; below 0 hides the meter.
+    level: float,
+    graph: GraphData,
+    graph2: GraphData,
+    second: bool,
+    available: bool,
+}
+
+export struct InsightData {
+    id: string,
+    // 0 information, 1 warning
+    severity: int,
+    title: string,
+    detail: string,
+    action: string,
+}
+
+// Processes
+export struct CellData {
+    text: string,
+    // 0..1: how much the value stands out (CPU, memory and so on), tints the cell.
+    heat: float,
+}
+
+export struct ProcRowData {
+    // 0 section heading, 1 group of processes, 2 process
+    kind: int,
+    depth: int,
+    expandable: bool,
+    expanded: bool,
+    selected: bool,
+    dim: bool,
+    name: string,
+    count: string,
+    icon: image,
+    has-icon: bool,
+    // 0 running, 1 suspended, 2 not responding
+    status: int,
+    cells: [CellData],
+}
+
+export struct ColumnData {
+    title: string,
+    // A summary under the title, like the total CPU in use.
+    sub: string,
+    width: length,
+    right: bool,
+    // 0 not sorted, 1 ascending, 2 descending
+    sort: int,
+}
+
+// Performance
+export struct DeviceData {
+    kind: int,
+    title: string,
+    sub: string,
+    value: string,
+    graph: GraphData,
+    graph2: GraphData,
+    second: bool,
+}
+
+export struct PerfGraph {
+    title: string,
+    right: string,
+    graph: GraphData,
+    graph2: GraphData,
+    second: bool,
+    legend: string,
+    legend2: string,
+    // Full width and tall (the main graph), or half width.
+    big: bool,
+}
+
+export struct Segment {
+    label: string,
+    value: string,
+    tip: string,
+    frac: float,
+    // 0 accent, 1 accent lighter, 2 neutral, 3 empty
+    tone: int,
+}
+
+// Startup and services
+export struct StartupRow {
+    name: string,
+    publisher: string,
+    enabled: bool,
+    source: string,
+    icon: image,
+    has-icon: bool,
+    needs-admin: bool,
+    missing: bool,
+    selected: bool,
+}
+
+export struct ServiceRow {
+    name: string,
+    display: string,
+    status: string,
+    running: bool,
+    start: string,
+    pid: string,
+    selected: bool,
+}
+
+export struct CompactMetric {
+    label: string,
+    value: string,
+    level: float,
+    graph: GraphData,
+}
+
+export struct Swatch {
+    color: color,
+    selected: bool,
+}

@@ -1,0 +1,115 @@
+import { Theme, Icons } from "theme.slint";
+import { App } from "state.slint";
+import { Icon, IconButton, FocusRing } from "widgets.slint";
+
+component NavItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <int> index;
+    in property <string> hint;
+    property <bool> active: App.page == index;
+    height: 38px;
+    border-radius: Theme.radius-small;
+    background: active ? Theme.selection : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: tab;
+    accessible-label: label;
+    accessible-item-selected: active;
+    accessible-action-default => { App.navigate(index); }
+    animate background { duration: Theme.quick; }
+    // The accent mark beside the current page.
+    Rectangle {
+        x: 0;
+        width: 3px;
+        height: root.active ? 16px : 0px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: Theme.accent;
+        animate height { duration: Theme.calm; easing: ease-out; }
+    }
+    HorizontalLayout {
+        padding-left: App.sidebar-compact ? (root.width - 18px) / 2 : 12px;
+        spacing: 12px;
+        Icon {
+            d: root.icon;
+            size: 18px;
+            color: root.active ? Theme.accent : Theme.secondary;
+            y: (parent.height - self.height) / 2;
+        }
+        if !App.sidebar-compact: Text {
+            text: root.label;
+            color: root.active ? Theme.text : Theme.secondary;
+            font-size: Theme.body;
+            font-weight: root.active ? 600 : 500;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { App.navigate(root.index); }
+    }
+    if App.sidebar-compact && ta.has-hover: Tooltip { Text { text: root.label + "  " + root.hint; color: Theme.text; font-size: Theme.small; } }
+}
+
+export component Sidebar inherits Rectangle {
+    width: App.sidebar-compact ? 60px : 216px;
+    background: Theme.sidebar;
+    animate width { duration: Theme.calm; easing: ease-in-out; }
+    VerticalLayout {
+        padding: 10px;
+        padding-top: 14px;
+        spacing: 2px;
+        // Title
+        HorizontalLayout {
+            height: 40px;
+            padding-left: App.sidebar-compact ? 9px : 8px;
+            spacing: 10px;
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 6px;
+                background: @linear-gradient(180deg, #8b4cf6 0%, #6d28d9 100%);
+                Icon { d: Icons.performance; color: #ffffff; size: 16px; weight: 2.2px; }
+            }
+            if !App.sidebar-compact: VerticalLayout {
+                alignment: center;
+                spacing: -2px;
+                Text { text: "Task Manager"; color: Theme.text; font-size: Theme.body; font-weight: 600; }
+                Text { text: "Bero"; color: Theme.tertiary; font-size: Theme.tiny; }
+            }
+        }
+        Rectangle { height: 12px; }
+        NavItem { icon: Icons.overview; label: "Overview"; index: 0; hint: "Ctrl+1"; }
+        NavItem { icon: Icons.processes; label: "Processes"; index: 1; hint: "Ctrl+2"; }
+        NavItem { icon: Icons.performance; label: "Performance"; index: 2; hint: "Ctrl+3"; }
+        NavItem { icon: Icons.startup; label: "Startup"; index: 3; hint: "Ctrl+4"; }
+        NavItem { icon: Icons.services; label: "Services"; index: 4; hint: "Ctrl+5"; }
+        Rectangle { vertical-stretch: 1; }
+        if !App.elevated && !App.sidebar-compact: Rectangle {
+            height: 34px;
+            border-radius: Theme.radius-small;
+            background: eta.has-hover ? Theme.hover : transparent;
+            HorizontalLayout {
+                padding-left: 12px;
+                spacing: 12px;
+                Icon { d: Icons.shield; size: 16px; color: Theme.tertiary; y: (parent.height - self.height) / 2; }
+                Text { text: "Run as administrator"; color: Theme.tertiary; font-size: Theme.small; vertical-alignment: center; }
+            }
+            eta := TouchArea { mouse-cursor: pointer; clicked => { App.restart-elevated(); } }
+            if eta.has-hover: Tooltip { Text { text: "Restarts the app with administrator rights, to see and manage every process."; color: Theme.text; font-size: Theme.small; } }
+        }
+        NavItem { icon: Icons.compact; label: "Compact monitor"; index: -1; hint: "Ctrl+M";
+            TouchArea { mouse-cursor: pointer; clicked => { App.open-compact(); } }
+        }
+        NavItem { icon: Icons.settings; label: "Settings"; index: 5; hint: "Ctrl+,"; }
+        HorizontalLayout {
+            alignment: App.sidebar-compact ? center : start;
+            padding-top: 4px;
+            IconButton {
+                icon: Icons.sidebar;
+                tip: App.sidebar-compact ? "Expand sidebar" : "Collapse sidebar";
+                clicked => { App.toggle-sidebar(); }
+            }
+        }
+    }
+}

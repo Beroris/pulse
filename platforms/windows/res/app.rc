@@ -1,0 +1,28 @@
+#include <winver.h>
+1 ICON "app.ico"
+1 24 "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @VERSION_COMMA@
+PRODUCTVERSION @VERSION_COMMA@
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Beroris"
+      VALUE "FileDescription", "Bero Task Manager"
+      VALUE "ProductName", "Bero Task Manager"
+      VALUE "FileVersion", "@VERSION@"
+      VALUE "ProductVersion", "@VERSION@"
+      VALUE "OriginalFilename", "bero-task-manager.exe"
+      VALUE "LegalCopyright", "GPL-3.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
