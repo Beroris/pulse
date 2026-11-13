@@ -1,19 +1,19 @@
-; Bero Task Manager's installer: a normal Windows setup wizard, for the current user, with no
+; Pulse's installer: a normal Windows setup wizard, for the current user, with no
 ; admin rights.
 ;
 ; Build it with scripts/package-windows.ps1, which passes the version and the built exe:
-;   ISCC.exe /DAppVersion=1.0.0 /DSourceExe=..\target\release\bero-task-manager.exe installer\bero-task-manager.iss
+;   ISCC.exe /DAppVersion=1.0.0 /DSourceExe=..\target\release\pulse.exe installer\pulse.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
 #ifndef SourceExe
-  #define SourceExe "..\target\release\bero-task-manager.exe"
+  #define SourceExe "..\target\release\pulse.exe"
 #endif
 
-#define AppName "Bero Task Manager"
-#define AppExe "bero-task-manager.exe"
-#define FileBase "BeroTaskManager"
+#define AppName "Pulse"
+#define AppExe "pulse.exe"
+#define FileBase "Pulse"
 
 [Setup]
 ; Never change this: Windows knows the installed app by it, for upgrades and uninstalling.
@@ -22,8 +22,8 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Beroris
-AppPublisherURL=https://github.com/Beroris/task-manager
-AppSupportURL=https://github.com/Beroris/task-manager/issues
+AppPublisherURL=https://github.com/Beroris/pulse
+AppSupportURL=https://github.com/Beroris/pulse/issues
 AppComments=A fast, lightweight task manager.
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription={#AppName} Setup
@@ -62,8 +62,8 @@ Name: "desktopicon"; Description: "Put a shortcut on the desktop"; GroupDescript
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "See what your PC is doing"
-Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "See what your PC is doing"; Tasks: desktopicon
+Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Task manager: see what your PC is doing"
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Task manager: see what your PC is doing"; Tasks: desktopicon
 
 [Registry]
 ; The same entry the app's own "Start when I sign in" switch writes, so the two agree.
@@ -93,7 +93,7 @@ begin
   { The app holds this until its process has gone, and with it its hold on the exe. }
   for I := 1 to 50 do
   begin
-    if not CheckForMutexes('Local\BeroTaskManager.Instance') then
+    if not CheckForMutexes('Local\Beroris.Pulse.Instance') then
       Break;
     Sleep(100);
   end;

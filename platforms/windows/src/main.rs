@@ -1,6 +1,6 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
-//! Bero Task Manager for Windows.
+//! Pulse for Windows.
 //!
 //! Command line:
 //! - `--background`: start without showing the main window (used when signing in).
@@ -75,12 +75,24 @@ fn main() {
     let code = match tm_app::run(platform) {
         Ok(()) => 0,
         Err(e) => {
-            show_error(&format!("Bero Task Manager couldn't start.\n\n{e}"));
+            show_error(&format!("Pulse couldn't start.\n\n{e}"));
             1
         }
     };
-    // Worker threads (the collector, icon reads) have nothing to finish.
-    std::process::exit(code);
+    end_now(code);
+}
+
+/// Ends the process here, with settings already saved. A normal exit would first stop the worker
+/// threads, then tear down thread-locals, including the controller, whose collector waits for
+/// those threads and so panicked and aborted on every exit. Nothing left needs tearing down.
+pub fn end_now(code: u32) -> ! {
+    use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+    // A frame-rate trace session would outlive the process.
+    sampler::fps::stop_on_exit();
+    unsafe {
+        let _ = TerminateProcess(GetCurrentProcess(), code);
+    }
+    std::process::exit(code as i32)
 }
 
 fn show_error(text: &str) {

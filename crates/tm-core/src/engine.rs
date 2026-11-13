@@ -33,13 +33,15 @@ pub struct Demand {
     pub sensors: bool,
     /// Every GPU engine is on screen, so read them all each tick.
     pub gpu_engines: bool,
+    /// The frame rate is on screen.
+    pub fps: bool,
     /// Stop sampling altogether (hidden with background monitoring off).
     pub paused: bool,
 }
 
 impl Default for Demand {
     fn default() -> Self {
-        Self { processes: true, windows: true, services: true, process_gpu: false, memory_detail: true, sensors: true, gpu_engines: true, paused: false }
+        Self { processes: true, windows: true, services: true, process_gpu: false, memory_detail: true, sensors: true, gpu_engines: true, fps: false, paused: false }
     }
 }
 
@@ -86,6 +88,8 @@ pub struct Histories {
     pub disks: Vec<DiskHist>,
     pub nets: Vec<NetHist>,
     pub gpus: Vec<GpuHist>,
+    /// Frame rate of the app in front.
+    pub fps: History,
 }
 
 impl Histories {
@@ -101,12 +105,13 @@ impl Histories {
             disks: Vec::new(),
             nets: Vec::new(),
             gpus: Vec::new(),
+            fps: History::new(cap),
         }
     }
 
     fn resize(&mut self, cap: usize) {
         self.cap = cap;
-        for h in [&mut self.cpu, &mut self.cpu_kernel, &mut self.mem_pct, &mut self.mem_used, &mut self.commit] {
+        for h in [&mut self.cpu, &mut self.cpu_kernel, &mut self.mem_pct, &mut self.mem_used, &mut self.commit, &mut self.fps] {
             h.resize(cap);
         }
         self.cores.iter_mut().for_each(|h| h.resize(cap));
@@ -301,16 +306,30 @@ impl Worker {
         // A first sample right away and a second one shortly after, so rates show within a moment
         // of starting instead of after a whole interval.
         self.tick();
+        if self.demand.paused {
+            // Started paused (hidden at sign-in, set to pause): let go of what that sample opened,
+            // the same as pausing later does.
+            let _ = catch_unwind(AssertUnwindSafe(|| self.sampler.pause()));
+        }
         let mut next = Instant::now() + Duration::from_millis(300);
         loop {
-            let wait = next.saturating_duration_since(Instant::now());
-            match rx.recv_timeout(wait) {
+            let got = if self.demand.paused {
+                // Nothing to sample until told otherwise: sleep until a command comes.
+                rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            } else {
+                rx.recv_timeout(next.saturating_duration_since(Instant::now()))
+            };
+            match got {
                 Ok(cmd) => {
                     match cmd {
                         Command::Demand(d) => {
                             let woke = self.demand.paused && !d.paused;
                             let more = (d.processes && !self.demand.processes) || (d.process_gpu && !self.demand.process_gpu) || (d.gpu_engines && !self.demand.gpu_engines);
+                            let paused = d.paused && !self.demand.paused;
                             self.demand = d;
+                            if paused {
+                                let _ = catch_unwind(AssertUnwindSafe(|| self.sampler.pause()));
+                            }
                             if woke {
                                 // Rates across a long pause would be averages over the pause: start fresh.
                                 self.prev = None;
@@ -387,6 +406,7 @@ impl Worker {
             memory_detail: d.memory_detail,
             sensors: d.sensors || self.ticks % 5 == 0,
             gpu_engines: d.gpu_engines,
+            fps: d.fps,
         }
     }
 
@@ -456,7 +476,11 @@ impl Worker {
         let system_delta = total_pair.and_then(|(a, b): (CpuTimes, CpuTimes)| delta_u64(a.total(), b.total()));
         frame.cpu.speed_mhz = raw.cpu.performance_pct.zip(info.cpu.base_mhz).map(|(pct, base)| (base as f32 * pct / 100.0).round() as u32);
         frame.cpu.temperature_c = raw.thermal.iter().find(|t| t.kind == ThermalKind::Cpu).map(|t| t.celsius);
+        frame.cpu.power_w = raw.cpu.power_w;
+        frame.cpu.sensor = raw.cpu.sensor;
         frame.thermal = raw.thermal.clone();
+        frame.fps = raw.fps.clone();
+        frame.fps_access = raw.fps_access;
 
         frame.mem = raw.mem;
 
@@ -626,6 +650,7 @@ fn push_history(h: &mut Histories, f: &Frame, info: &SystemInfo) {
         hist.dedicated.push_opt(g.dedicated_used.map(|v| v as f32));
         hist.shared.push_opt(g.shared_used.map(|v| v as f32));
     }
+    h.fps.push_opt(f.fps.as_ref().map(|f| f.fps));
 }
 
 #[cfg(test)]
@@ -653,7 +678,7 @@ mod tests {
             // Two logical CPUs, 1 s apart: 2e7 units of total time, a quarter of it busy.
             let total = CpuTimes { idle: n * 15_000_000, kernel: n * 15_000_000 + n * 1_000_000, user: n * 4_000_000 };
             RawSample {
-                cpu: RawCpu { total: Some(total), cores: vec![total, total], performance_pct: Some(110.0) },
+                cpu: RawCpu { total: Some(total), cores: vec![total, total], performance_pct: Some(110.0), ..Default::default() },
                 mem: Some(MemNow { total: 1000, available: 400, commit: 10, commit_limit: 100, ..Default::default() }),
                 disks: vec![RawDisk { id: 0, bytes_read: n * 1_000_000, query_time: n * 10_000_000, idle_time: n * 5_000_000, ..Default::default() }],
                 nets: vec![RawNet { id: 9, in_octets: n * 2000, out_octets: n * 1000, link_bps: None }],

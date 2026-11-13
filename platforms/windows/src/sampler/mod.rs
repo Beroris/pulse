@@ -7,16 +7,21 @@
 //! - Disks: `IOCTL_DISK_PERFORMANCE` on each physical disk.
 //! - Network: `GetIfEntry2` per adapter.
 //! - GPU: the D3DKMT statistics interface (what Task Manager uses), names and sizes from DXGI.
-//! - Temperatures: GPU from D3DKMT adapter performance data; ACPI thermal zones from PDH.
+//! - Temperatures: GPU from D3DKMT adapter performance data; ACPI thermal zones from PDH; the
+//!   CPU's own sensor and energy counter through PawnIO, when it's installed and the app is elevated.
+//! - Frame rate: a real-time ETW session on the graphics providers, only while it's shown.
 //! No WMI anywhere: WMI queries cost tens of milliseconds and wake a service process.
 
+mod cpusensor;
 mod disks;
+pub mod fps;
 mod gpu;
 mod info;
 mod net;
 mod procs;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tm_core::cpu::CpuTimes;
 use tm_core::model::*;
@@ -46,20 +51,35 @@ struct ProcessorPerf {
     interrupt_count: u32,
 }
 
-struct PdhSet {
+/// Processor performance, for the live clock speed. A rate, so it needs the previous collect and
+/// stays open.
+struct PerfQuery {
     q: pdh::Query,
     perf: usize,
+}
+
+/// The memory lists and pools, only while the memory view is open. Plain values: a new query
+/// reads them on its first collect.
+struct MemQuery {
+    q: pdh::Query,
     standby: [usize; 3],
     modified: usize,
     free: usize,
     paged: usize,
     nonpaged: usize,
-    thermal_hp: usize,
-    thermal: usize,
+}
+
+/// ACPI thermal zones, only while temperatures are shown. Plain values too.
+struct ThermalQuery {
+    q: pdh::Query,
+    high_precision: usize,
+    plain: usize,
 }
 
 pub struct WinSampler {
-    pdh: Option<PdhSet>,
+    perf: Option<PerfQuery>,
+    mem_pdh: Option<MemQuery>,
+    thermal_pdh: Option<ThermalQuery>,
     procs: procs::Snapshot,
     disks: disks::Disks,
     nets: net::Nets,
@@ -69,12 +89,21 @@ pub struct WinSampler {
     cpu_buf: Vec<ProcessorPerf>,
     static_cache: Option<(CpuInfo, MemInfo, String, String)>,
     scm: Option<procs::Scm>,
+    cpu_sensors: cpusensor::CpuSensors,
+    fps: Option<fps::FpsTracer>,
+    /// Why frames aren't being counted, and when that was found, to try again later.
+    fps_off: Option<(FpsAccess, Instant)>,
 }
+
+/// After failing to start counting frames, wait this long before trying again.
+const FPS_RETRY: Duration = Duration::from_secs(15);
 
 impl WinSampler {
     pub fn new() -> WinSampler {
         WinSampler {
-            pdh: None,
+            perf: None,
+            mem_pdh: None,
+            thermal_pdh: None,
             procs: procs::Snapshot::new(),
             disks: disks::Disks::default(),
             nets: net::Nets::default(),
@@ -83,13 +112,51 @@ impl WinSampler {
             cpu_buf: Vec::new(),
             static_cache: None,
             scm: procs::Scm::open(),
+            cpu_sensors: cpusensor::CpuSensors::new(),
+            fps: None,
+            fps_off: None,
         }
     }
 
-    fn pdh(&mut self) -> Option<&mut PdhSet> {
-        if self.pdh.is_none() {
+    /// Starts or stops the frame trace to match the request, and reads it.
+    fn fps(&mut self, wanted: bool) -> (Option<FpsNow>, FpsAccess) {
+        if !wanted {
+            self.fps = None;
+            self.fps_off = None;
+            return (None, FpsAccess::Off);
+        }
+        if self.fps.is_none() && self.fps_off.is_none_or(|(_, at)| at.elapsed() >= FPS_RETRY) {
+            match fps::FpsTracer::start() {
+                Ok(t) => {
+                    self.fps = Some(t);
+                    self.fps_off = None;
+                }
+                Err(a) => self.fps_off = Some((a, Instant::now())),
+            }
+        }
+        match self.fps.as_mut() {
+            Some(t) => (t.read(), FpsAccess::Ok),
+            None => (None, self.fps_off.map_or(FpsAccess::Failed, |o| o.0)),
+        }
+    }
+
+    /// Collects processor performance and returns it, in percent of the base clock.
+    fn performance(&mut self) -> Option<f32> {
+        if self.perf.is_none() {
             let mut q = pdh::Query::new()?;
             let perf = q.add(r"\Processor Information(_Total)\% Processor Performance");
+            q.collect();
+            self.perf = Some(PerfQuery { q, perf });
+        }
+        let p = self.perf.as_ref()?;
+        p.q.collect();
+        p.q.value(p.perf).map(|v| v as f32)
+    }
+
+    /// Collects the memory lists, opening their query on first use.
+    fn mem_counters(&mut self) -> Option<&MemQuery> {
+        if self.mem_pdh.is_none() {
+            let mut q = pdh::Query::new()?;
             let standby = [
                 q.add(r"\Memory\Standby Cache Reserve Bytes"),
                 q.add(r"\Memory\Standby Cache Normal Priority Bytes"),
@@ -99,12 +166,11 @@ impl WinSampler {
             let free = q.add(r"\Memory\Free & Zero Page List Bytes");
             let paged = q.add(r"\Memory\Pool Paged Bytes");
             let nonpaged = q.add(r"\Memory\Pool Nonpaged Bytes");
-            let thermal_hp = q.add(r"\Thermal Zone Information(*)\High Precision Temperature");
-            let thermal = q.add(r"\Thermal Zone Information(*)\Temperature");
-            q.collect();
-            self.pdh = Some(PdhSet { q, perf, standby, modified, free, paged, nonpaged, thermal_hp, thermal });
+            self.mem_pdh = Some(MemQuery { q, standby, modified, free, paged, nonpaged });
         }
-        self.pdh.as_mut()
+        let m = self.mem_pdh.as_ref()?;
+        m.q.collect();
+        Some(m)
     }
 
     fn cpu(&mut self) -> RawCpu {
@@ -136,7 +202,7 @@ impl WinSampler {
         let total = (!cores.is_empty()).then(|| {
             cores.iter().fold(CpuTimes::default(), |a, c| CpuTimes { idle: a.idle + c.idle, kernel: a.kernel + c.kernel, user: a.user + c.user })
         });
-        RawCpu { total, cores, performance_pct: None }
+        RawCpu { total, cores, ..Default::default() }
     }
 
     fn memory(&mut self, detail: bool) -> (Option<MemNow>, Option<u64>) {
@@ -160,30 +226,37 @@ impl WinSampler {
             m.paged_pool = Some(pi.KernelPaged as u64 * page);
             m.nonpaged_pool = Some(pi.KernelNonpaged as u64 * page);
         }
-        if detail {
-            if let Some(p) = self.pdh() {
-                let sum: Option<f64> = p.standby.iter().map(|&i| p.q.value(i)).sum();
-                m.standby = sum.map(|v| v as u64);
-                m.modified = p.q.value(p.modified).map(|v| v as u64);
-                m.free = p.q.value(p.free).map(|v| v as u64);
-                m.cached = m.standby.zip(m.modified).map(|(s, md)| s + md);
-                if let Some(v) = p.q.value(p.paged) {
-                    m.paged_pool = Some(v as u64);
-                }
-                if let Some(v) = p.q.value(p.nonpaged) {
-                    m.nonpaged_pool = Some(v as u64);
-                }
+        if !detail {
+            self.mem_pdh = None;
+        } else if let Some(p) = self.mem_counters() {
+            let sum: Option<f64> = p.standby.iter().map(|&i| p.q.value(i)).sum();
+            m.standby = sum.map(|v| v as u64);
+            m.modified = p.q.value(p.modified).map(|v| v as u64);
+            m.free = p.q.value(p.free).map(|v| v as u64);
+            m.cached = m.standby.zip(m.modified).map(|(s, md)| s + md);
+            if let Some(v) = p.q.value(p.paged) {
+                m.paged_pool = Some(v as u64);
+            }
+            if let Some(v) = p.q.value(p.nonpaged) {
+                m.nonpaged_pool = Some(v as u64);
             }
         }
         (Some(m), ok_pi.then_some(pi.HandleCount as u64))
     }
 
     fn thermal(&mut self) -> Vec<ThermalReading> {
-        let Some(p) = self.pdh() else { return Vec::new() };
+        if self.thermal_pdh.is_none() {
+            let Some(mut q) = pdh::Query::new() else { return Vec::new() };
+            let high_precision = q.add(r"\Thermal Zone Information(*)\High Precision Temperature");
+            let plain = q.add(r"\Thermal Zone Information(*)\Temperature");
+            self.thermal_pdh = Some(ThermalQuery { q, high_precision, plain });
+        }
+        let Some(p) = self.thermal_pdh.as_ref() else { return Vec::new() };
+        p.q.collect();
         // "High Precision Temperature" is in tenths of a kelvin; the older counter in kelvin.
-        let mut zones: Vec<(String, f64)> = p.q.array(p.thermal_hp).into_iter().map(|(n, v)| (n, v / 10.0)).collect();
+        let mut zones: Vec<(String, f64)> = p.q.array(p.high_precision).into_iter().map(|(n, v)| (n, v / 10.0)).collect();
         if zones.is_empty() {
-            zones = p.q.array(p.thermal);
+            zones = p.q.array(p.plain);
         }
         zones
             .into_iter()
@@ -233,11 +306,8 @@ impl Sampler for WinSampler {
     }
 
     fn sample(&mut self, req: &SampleRequest) -> RawSample {
-        if let Some(p) = self.pdh() {
-            p.q.collect();
-        }
         let mut cpu = self.cpu();
-        cpu.performance_pct = self.pdh().and_then(|p| p.q.value(p.perf)).map(|v| v as f32);
+        cpu.performance_pct = self.performance();
         let (mem, handles) = self.memory(req.memory_detail);
         let mut raw = RawSample {
             cpu,
@@ -252,8 +322,17 @@ impl Sampler for WinSampler {
             raw.gpus = g.sample(req.sensors, req.gpu_engines);
         }
         if req.sensors {
+            let c = self.cpu_sensors.read();
             raw.thermal = self.thermal();
+            if let Some(celsius) = c.celsius {
+                raw.thermal.insert(0, ThermalReading { name: "CPU".into(), celsius, kind: ThermalKind::Cpu });
+            }
+            raw.cpu.power_w = c.watts;
+            raw.cpu.sensor = c.access;
         }
+        // The thermal query stays open between readings: sensors are read every fifth tick even
+        // when nothing shows them, and reopening it each time costs more than keeping it.
+        (raw.fps, raw.fps_access) = self.fps(req.fps);
         if req.processes {
             if let Some((list, disk_io)) = self.procs.sample() {
                 self.compressed = list.iter().find(|p| p.pid > 4 && &*p.name == "Memory Compression").map(|p| p.working_set);
@@ -274,10 +353,20 @@ impl Sampler for WinSampler {
             if req.services {
                 raw.services = self.scm.as_ref().map(|s| enum_service_owners(s));
             }
-        } else if let Some(g) = self.gpus.as_mut() {
-            g.forget_processes();
+        } else {
+            self.procs.release_buffer();
+            if let Some(g) = self.gpus.as_mut() {
+                g.forget_processes();
+            }
         }
         raw
+    }
+
+    fn pause(&mut self) {
+        self.fps = None;
+        self.mem_pdh = None;
+        self.thermal_pdh = None;
+        self.procs.release_buffer();
     }
 }
 
@@ -326,11 +415,11 @@ mod tests {
         }
         let mut s = WinSampler::new();
         s.describe(true);
-        let all = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true, gpu_engines: true };
-        let hidden = SampleRequest { processes: true, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, gpu_engines: false };
+        let all = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true, gpu_engines: true, fps: false };
+        let hidden = SampleRequest { processes: true, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, gpu_engines: false, fps: false };
         s.sample(&all);
-        time("pdh collect", || {
-            s.pdh().map(|p| p.q.collect());
+        time("processor performance (pdh)", || {
+            s.performance();
         });
         time("cpu", || {
             s.cpu();
@@ -383,7 +472,7 @@ mod tests {
         let info = s.describe(true);
         assert!(info.cpu.logical > 0, "{:?}", info.cpu);
         assert!(info.mem.total > 0);
-        let req = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true, gpu_engines: true };
+        let req = SampleRequest { processes: true, windows: true, services: true, process_gpu: true, memory_detail: true, sensors: true, gpu_engines: true, fps: false };
         let raw = s.sample(&req);
         assert_eq!(raw.cpu.cores.len() as u32, info.cpu.logical);
         let procs = raw.processes.expect("process list");

@@ -11,14 +11,21 @@ use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificL
 use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
 use windows::core::{GUID, PCWSTR};
 
-pub const APP_NAME: &str = "Bero Task Manager";
+pub const APP_NAME: &str = "Pulse";
 /// The value the app's "Start when I sign in" switch and the installer both write.
-pub const RUN_VALUE: &str = "Bero Task Manager";
+pub const RUN_VALUE: &str = "Pulse";
 pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-/// Held while the app runs, so the installer and a second launch can tell.
-pub const MUTEX_NAME: &str = r"Local\BeroTaskManager.Instance";
+/// Held while the app runs, so the installer and a second launch can tell. Development builds
+/// use their own names, so one can run beside an installed copy instead of handing over to it.
+#[cfg(not(debug_assertions))]
+pub const MUTEX_NAME: &str = r"Local\Beroris.Pulse.Instance";
+#[cfg(debug_assertions)]
+pub const MUTEX_NAME: &str = r"Local\Beroris.Pulse.Instance.Dev";
 /// Class of the hidden window a second launch talks to.
-pub const IPC_CLASS: &str = "BeroTaskManager.Ipc";
+#[cfg(not(debug_assertions))]
+pub const IPC_CLASS: &str = "Beroris.Pulse.Ipc";
+#[cfg(debug_assertions)]
+pub const IPC_CLASS: &str = "Beroris.Pulse.Ipc.Dev";
 
 /// Null-terminated UTF-16.
 pub fn wide(s: &str) -> Vec<u16> {
@@ -287,8 +294,8 @@ pub fn is_portable() -> bool {
         .is_some_and(|stem| stem.contains("portable"))
 }
 
-/// Where settings live, created if needed: a "Bero Task Manager settings" folder beside a portable
-/// copy, otherwise `%APPDATA%\Bero Task Manager`.
+/// Where settings live, created if needed: a "Pulse settings" folder beside a portable
+/// copy, otherwise `%APPDATA%\Pulse`.
 pub fn data_dir() -> PathBuf {
     if is_portable() {
         if let Some(beside) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|p| p.join(format!("{APP_NAME} settings")))) {

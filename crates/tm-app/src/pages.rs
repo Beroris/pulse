@@ -122,7 +122,15 @@ pub fn cards(f: &Frame, info: &SystemInfo, h: &Histories, icons: &IconSet) -> Ve
     let (t_title, t_value, t_sub, t_ok) = match (f.cpu.temperature_c, zone) {
         (Some(c), _) => ("CPU temperature", format::celsius(c), "CPU sensor".to_string(), true),
         (None, Some(z)) => ("System temperature", format::celsius(z), "Firmware thermal zone, not the CPU itself".to_string(), true),
-        (None, None) => ("CPU temperature", String::new(), "Windows doesn't get a reading from this PC".to_string(), false),
+        (None, None) => (
+            "CPU temperature",
+            String::new(),
+            match f.cpu.sensor {
+                SensorAccess::NeedsAdmin => "Run as administrator to read the CPU's sensor".to_string(),
+                _ => "Windows doesn't get a reading from this PC".to_string(),
+            },
+            false,
+        ),
     };
     let t_val = f.cpu.temperature_c.or(zone);
     out.push(CardData {
@@ -309,10 +317,18 @@ pub fn devices(keys: &[DevKey], f: &Frame, info: &SystemInfo, h: &Histories) -> 
                 kind: 0,
                 title: "CPU".into(),
                 sub: short_cpu_name(&info.cpu.name).into(),
-                value: match (f.cpu.total, f.cpu.speed_mhz) {
-                    (Some(t), Some(m)) => format!("{}  {}", format::pct(t), format::mhz(m)),
-                    (Some(t), None) => format::pct(t),
-                    _ => String::new(),
+                value: {
+                    let mut parts: Vec<String> = Vec::new();
+                    if let Some(t) = f.cpu.total {
+                        parts.push(format::pct(t));
+                        if let Some(m) = f.cpu.speed_mhz {
+                            parts.push(format::mhz(m));
+                        }
+                        if let Some(c) = f.cpu.temperature_c {
+                            parts.push(format!("({})", format::celsius(c)));
+                        }
+                    }
+                    parts.join("  ")
                 }
                 .into(),
                 graph: graph(&h.cpu, 100.0, MINI_POINTS),
@@ -454,7 +470,10 @@ fn cpu_detail(f: &Frame, info: &SystemInfo, h: &Histories, per_core: bool, inter
     }
     live.push(stat("Up time", f.sys.uptime_secs.map(format::uptime).unwrap_or_default()));
     if let Some(t) = f.cpu.temperature_c {
-        live.push(stat("Temperature", format::celsius(t)));
+        live.push(stat_tip("Temperature", format::celsius(t), "The CPU's own sensor, read through PawnIO. On Ryzen this is Tctl, what the CPU manages its fans and boost by."));
+    }
+    if let Some(w) = f.cpu.power_w {
+        live.push(stat_tip("Power", format!("{w:.0} W"), "The whole package, from the CPU's own energy counter."));
     }
     let mut fixed = vec![
         stat("Base speed", opt(c.base_mhz.map(format::mhz))),
@@ -472,12 +491,29 @@ fn cpu_detail(f: &Frame, info: &SystemInfo, h: &Histories, per_core: bool, inter
     let zones: Vec<String> = f.thermal.iter().filter(|t| t.kind == ThermalKind::Zone).map(|t| format!("{} {}", t.name, format::celsius(t.celsius))).collect();
     let note = if f.cpu.temperature_c.is_some() {
         String::new()
-    } else if !zones.is_empty() {
-        format!("Windows has no reading from the CPU's own sensor. Firmware thermal zones report: {}. These are usually motherboard sensors, not the CPU.", zones.join(", "))
     } else {
-        "Windows doesn't get a CPU temperature reading on this PC, so none is shown.".into()
+        let mut n = if zones.is_empty() {
+            "Windows doesn't get a CPU temperature reading on this PC, so none is shown.".to_string()
+        } else {
+            format!("Windows has no reading from the CPU's own sensor. Firmware thermal zones report: {}. These are usually motherboard sensors, not the CPU.", zones.join(", "))
+        };
+        if let Some(hint) = sensor_hint(f.cpu.sensor) {
+            n.push(' ');
+            n.push_str(hint);
+        }
+        n
     };
     Detail { title: "CPU".into(), subtitle: c.name.clone(), graphs: vec![g], is_cpu: true, cores, live, fixed, segments: Vec::new(), note }
+}
+
+/// What would give a CPU temperature, when there's none.
+fn sensor_hint(s: SensorAccess) -> Option<&'static str> {
+    match s {
+        SensorAccess::NeedsAdmin => Some("PawnIO is installed, so Run as administrator shows the temperature and power from the CPU itself."),
+        SensorAccess::NoDriver => Some("Hardware tools read the CPU's own sensor through a driver. If PawnIO is installed (LibreHardwareMonitor and OpenRGB install it, or get it from pawnio.eu), Run as administrator shows it here."),
+        SensorAccess::Unsupported => Some("PawnIO is installed but can't read this CPU's sensor."),
+        SensorAccess::Ok | SensorAccess::Unknown => None,
+    }
 }
 
 fn mem_detail(f: &Frame, info: &SystemInfo, h: &Histories, interval: f32) -> Detail {
@@ -729,7 +765,41 @@ pub fn compact(metrics: &[Metric], f: &Frame, info: &SystemInfo, h: &Histories) 
     metrics
         .iter()
         .map(|m| match m {
-            Metric::Cpu => CompactMetric { label: "CPU".into(), value: f.cpu.total.map(format::pct).unwrap_or_else(|| "—".into()).into(), level: level(f.cpu.total), graph: graph(&h.cpu, 100.0, POINTS) },
+            Metric::Cpu => CompactMetric {
+                label: "CPU".into(),
+                value: match (f.cpu.total, f.cpu.temperature_c) {
+                    (Some(u), Some(t)) => format!("{} · {}", format::pct(u), format::celsius(t)),
+                    (Some(u), None) => format::pct(u),
+                    _ => "—".into(),
+                }
+                .into(),
+                level: level(f.cpu.total),
+                graph: graph(&h.cpu, 100.0, POINTS),
+            },
+            Metric::Fps => {
+                let (label, value) = match (&f.fps, f.fps_access) {
+                    (Some(x), _) => (format!("FPS · {}", x.name), format!("{:.0}", x.fps)),
+                    (None, FpsAccess::NeedsPermission) => ("FPS · needs admin".to_string(), "—".to_string()),
+                    (None, FpsAccess::Failed) => ("FPS unavailable".to_string(), "—".to_string()),
+                    (None, _) => ("FPS".to_string(), "—".to_string()),
+                };
+                let top = nice_ceiling(h.fps.max().unwrap_or(0.0) as f64, 60.0) as f32;
+                CompactMetric { label: label.into(), value: value.into(), level: -1.0, graph: graph(&h.fps, top, POINTS) }
+            }
+            Metric::GpuMemory => {
+                let gi = info.gpus.first();
+                let g = gi.and_then(|gi| f.gpus.iter().find(|g| g.id == gi.id));
+                let used = g.and_then(|g| g.dedicated_used);
+                let limit = g.and_then(|g| g.dedicated_limit).or(gi.and_then(|gi| gi.dedicated)).filter(|l| *l > 0);
+                let value = match (used, limit) {
+                    (Some(u), Some(l)) => gpu_memory(u, l),
+                    (Some(u), None) => format::bytes(u),
+                    _ => if g.is_none() { "None".to_string() } else { "—".to_string() },
+                };
+                let pct = used.zip(limit).map(|(u, l)| (u as f64 / l as f64 * 100.0) as f32);
+                let top = limit.map_or_else(|| g.and_then(|g| h.gpu(g.id)).and_then(|x| x.dedicated.max()).unwrap_or(1.0), |l| l as f32);
+                CompactMetric { label: "GPU memory".into(), value: value.into(), level: level(pct), graph: g.and_then(|g| h.gpu(g.id)).map(|x| graph(&x.dedicated, top, POINTS)).unwrap_or_default() }
+            }
             Metric::Memory => CompactMetric {
                 label: "Memory".into(),
                 value: f.mem.map(|m| format!("{} · {}", format::pct(m.used_pct()), format::bytes(m.used()))).unwrap_or_else(|| "—".into()).into(),
@@ -785,9 +855,58 @@ pub fn compact(metrics: &[Metric], f: &Frame, info: &SystemInfo, h: &Histories) 
         .collect()
 }
 
+/// "5.2 / 16 GB": the limit is a round size, so its decimals are noise.
+fn gpu_memory(used: u64, limit: u64) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    if limit as f64 >= GB {
+        format!("{:.1} / {:.0} GB", used as f64 / GB, limit as f64 / GB)
+    } else {
+        format!("{} / {}", format::bytes(used), format::bytes(limit))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_memory_reads_short() {
+        let gb = 1024 * 1024 * 1024u64;
+        assert_eq!(gpu_memory(5 * gb + gb / 5, 16 * gb - 1024 * 1024), "5.2 / 16 GB");
+    }
+
+    #[test]
+    fn compact_rows_say_why_there_is_no_value() {
+        let info = SystemInfo::default();
+        let h = test_hist();
+        let mut f = Frame::default();
+        f.fps_access = FpsAccess::NeedsPermission;
+        let rows = compact(&[Metric::Fps, Metric::GpuMemory], &f, &info, &h);
+        assert_eq!(rows[0].label.as_str(), "FPS · needs admin");
+        assert_eq!(rows[0].value.as_str(), "—");
+        assert_eq!(rows[1].value.as_str(), "None", "no GPU");
+        f.fps = Some(FpsNow { pid: 42, name: "Overwatch".into(), fps: 143.6 });
+        f.fps_access = FpsAccess::Ok;
+        let rows = compact(&[Metric::Fps], &f, &info, &h);
+        assert_eq!(rows[0].label.as_str(), "FPS · Overwatch");
+        assert_eq!(rows[0].value.as_str(), "144");
+    }
+
+    #[test]
+    fn missing_cpu_sensor_explains_how_to_get_one() {
+        let info = SystemInfo::default();
+        let h = test_hist();
+        let mut f = Frame::default();
+        f.cpu.sensor = SensorAccess::NeedsAdmin;
+        let d = cpu_detail(&f, &info, &h, false, 1.0);
+        assert!(d.note.contains("Run as administrator"), "{}", d.note);
+        f.cpu.temperature_c = Some(52.5);
+        f.cpu.power_w = Some(64.6);
+        f.cpu.sensor = SensorAccess::Ok;
+        let d = cpu_detail(&f, &info, &h, false, 1.0);
+        assert!(d.note.is_empty());
+        assert!(d.live.iter().any(|s| s.label == "Power" && s.value == "65 W"));
+    }
 
     #[test]
     fn cpu_names_are_shortened() {
@@ -818,6 +937,7 @@ mod tests {
             disks: Vec::new(),
             nets: Vec::new(),
             gpus: Vec::new(),
+            fps: History::new(4),
         }
     }
 }

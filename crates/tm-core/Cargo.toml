@@ -3,7 +3,7 @@ name = "tm-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Platform-neutral core of Bero Task Manager: data model, counter maths, process table, insights, settings. No OS calls."
+description = "Platform-neutral core of Pulse: data model, counter maths, process table, insights, settings. No OS calls."
 
 [dependencies]
 serde.workspace = true

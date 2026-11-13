@@ -1,10 +1,113 @@
 //! Startup apps and services: the lists, search, selection and the facts shown beside them.
 
+use std::cmp::Ordering;
+
 use slint::{Image, SharedString};
 use tm_core::platform::{ServiceInfo, ServiceState, StartType, StartupEntry};
+use tm_core::settings::TableLayout;
 
 use crate::util::stat;
-use crate::{ServiceRow, StartupRow, StatData};
+use crate::{ColumnData, ServiceRow, StartupRow, StatData};
+
+// ─── Columns ───────────────────────────────────────────────────────────────
+
+/// A column of a simple table. One column per table stretches: it takes the room the others leave
+/// until a column is resized, then keeps its own width so dragging an edge moves only that edge.
+pub struct ColSpec {
+    pub key: &'static str,
+    pub title: &'static str,
+    pub width: f32,
+    pub right: bool,
+    pub stretch: bool,
+}
+
+const fn col(key: &'static str, title: &'static str, width: f32) -> ColSpec {
+    ColSpec { key, title, width, right: false, stretch: false }
+}
+
+pub const STARTUP_COLS: [ColSpec; 4] = [
+    ColSpec { stretch: true, ..col("name", "Name", 0.0) },
+    col("publisher", "Publisher", 190.0),
+    col("source", "Registered in", 210.0),
+    col("status", "Status", 150.0),
+];
+pub const STARTUP_SORT: &str = "name";
+
+pub const SERVICE_COLS: [ColSpec; 5] = [
+    col("name", "Name", 190.0),
+    ColSpec { stretch: true, ..col("display", "Display name", 0.0) },
+    col("status", "Status", 120.0),
+    col("start", "Startup type", 170.0),
+    ColSpec { right: true, ..col("pid", "PID", 80.0) },
+];
+pub const SERVICE_SORT: &str = "display";
+
+pub const MIN_WIDTH: f32 = 48.0;
+
+fn sort_key<'a>(t: &'a TableLayout, default: &'a str) -> &'a str {
+    if t.sort.is_empty() { default } else { &t.sort }
+}
+
+/// The columns to show, and the summed width of all but the stretching one. A stretching column
+/// that hasn't been resized has width 0: the view gives it what's left.
+pub fn columns(specs: &[ColSpec], t: &TableLayout, default_sort: &str) -> (Vec<ColumnData>, f32) {
+    let key = sort_key(t, default_sort);
+    let mut fixed = 0.0;
+    let cols = specs
+        .iter()
+        .map(|c| {
+            let width = t.widths.get(c.key).map(|w| *w as f32).unwrap_or(c.width);
+            if !c.stretch {
+                fixed += width;
+            }
+            ColumnData { title: c.title.into(), sub: SharedString::new(), width, right: c.right, sort: if c.key == key { if t.desc { 2 } else { 1 } } else { 0 } }
+        })
+        .collect();
+    (cols, fixed)
+}
+
+/// A click on a column title: sort by it, or turn the order round if it already is.
+pub fn sort_clicked(specs: &[ColSpec], t: &mut TableLayout, default_sort: &str, i: usize) {
+    let Some(c) = specs.get(i) else { return };
+    if sort_key(t, default_sort) == c.key {
+        t.desc = !t.desc;
+    } else {
+        t.sort = c.key.into();
+        t.desc = false;
+    }
+}
+
+pub fn resized(specs: &[ColSpec], t: &mut TableLayout, i: usize, w: f32) {
+    if let Some(c) = specs.get(i) {
+        t.widths.insert(c.key.into(), w.clamp(MIN_WIDTH, 1600.0).round() as u32);
+    }
+}
+
+/// Before any edge moves, the stretching column keeps the width it has on screen. Returns whether
+/// anything changed.
+pub fn pin_stretch(specs: &[ColSpec], t: &mut TableLayout, current: f32) -> bool {
+    match specs.iter().find(|c| c.stretch) {
+        Some(c) if !t.widths.contains_key(c.key) => {
+            t.widths.insert(c.key.into(), current.clamp(MIN_WIDTH, 2000.0).round() as u32);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn lower_cmp(a: &str, b: &str) -> Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
+
+/// Text that may be missing: missing goes last.
+fn opt_cmp(a: Option<&str>, b: Option<&str>) -> Ordering {
+    match (a.filter(|x| !x.is_empty()), b.filter(|x| !x.is_empty())) {
+        (Some(x), Some(y)) => lower_cmp(x, y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
 
 // ─── Startup ───────────────────────────────────────────────────────────────
 
@@ -18,6 +121,11 @@ pub struct Startup {
     pub shown: Vec<usize>,
     /// Selected entry, by id.
     pub selected: Option<String>,
+    /// 0 all, 1 enabled, 2 disabled
+    pub show: i32,
+    /// 0 anywhere, 1 registry, 2 startup folders, 3 Store apps
+    pub location: i32,
+    pub layout: TableLayout,
 }
 
 fn has(hay: &str, needle: &str) -> bool {
@@ -42,9 +150,38 @@ impl Startup {
         self.shown = (0..self.entries.len())
             .filter(|&i| {
                 let e = &self.entries[i].0;
-                n.is_empty() || has(&e.name, &n) || e.publisher.as_deref().is_some_and(|p| has(p, &n)) || has(&e.command, &n) || has(&e.source, &n)
+                let state_ok = match self.show {
+                    1 => e.enabled,
+                    2 => !e.enabled,
+                    _ => true,
+                };
+                let place_ok = match self.location {
+                    1 => e.source.starts_with("Registry"),
+                    2 => e.source.starts_with("Startup folder"),
+                    3 => e.source.starts_with("Store"),
+                    _ => true,
+                };
+                state_ok
+                    && place_ok
+                    && (n.is_empty() || has(&e.name, &n) || e.publisher.as_deref().is_some_and(|p| has(p, &n)) || has(&e.command, &n) || has(&e.source, &n))
             })
             .collect();
+        let key = sort_key(&self.layout, STARTUP_SORT).to_string();
+        let desc = self.layout.desc;
+        let entries = &self.entries;
+        self.shown.sort_by(|&a, &b| {
+            let (x, y) = (&entries[a].0, &entries[b].0);
+            let o = match key.as_str() {
+                "publisher" => opt_cmp(x.publisher.as_deref(), y.publisher.as_deref()),
+                "source" => lower_cmp(&x.source, &y.source),
+                // Enabled first.
+                "status" => y.enabled.cmp(&x.enabled),
+                _ => lower_cmp(&x.name, &y.name),
+            };
+            let o = if desc { o.reverse() } else { o };
+            // Ties by name, A to Z.
+            o.then_with(|| lower_cmp(&x.name, &y.name))
+        });
     }
 
     pub fn enabled_count(&self) -> u32 {
@@ -120,6 +257,22 @@ pub struct Services {
     pub shown: Vec<usize>,
     pub selected: Option<String>,
     pub busy: Option<String>,
+    /// 0 any, 1 automatic, 2 manual, 3 disabled
+    pub start_filter: i32,
+    pub layout: TableLayout,
+}
+
+/// Order of startup types when sorting: what starts on its own first.
+fn start_rank(t: StartType) -> u8 {
+    match t {
+        StartType::Boot => 0,
+        StartType::System => 1,
+        StartType::Automatic => 2,
+        StartType::AutomaticDelayed => 3,
+        StartType::Manual => 4,
+        StartType::Disabled => 5,
+        StartType::Unknown => 6,
+    }
 }
 
 impl Services {
@@ -165,7 +318,13 @@ impl Services {
                     2 => !s.state.is_running(),
                     _ => true,
                 };
-                if !state_ok {
+                let start_ok = match self.start_filter {
+                    1 => matches!(s.start, StartType::Automatic | StartType::AutomaticDelayed | StartType::Boot | StartType::System),
+                    2 => s.start == StartType::Manual,
+                    3 => s.start == StartType::Disabled,
+                    _ => true,
+                };
+                if !state_ok || !start_ok {
                     return false;
                 }
                 if let Some(p) = pid {
@@ -178,6 +337,23 @@ impl Services {
                     || (s.pid != 0 && s.pid.to_string() == raw)
             })
             .collect();
+        let key = sort_key(&self.layout, SERVICE_SORT).to_string();
+        let desc = self.layout.desc;
+        let list = &self.list;
+        self.shown.sort_by(|&a, &b| {
+            let (x, y) = (&list[a], &list[b]);
+            let o = match key.as_str() {
+                "name" => lower_cmp(&x.name, &y.name),
+                // Running first.
+                "status" => y.state.is_running().cmp(&x.state.is_running()).then_with(|| lower_cmp(x.state.label(), y.state.label())),
+                "start" => start_rank(x.start).cmp(&start_rank(y.start)).then_with(|| x.triggered.cmp(&y.triggered)),
+                // Services without a process of their own go last.
+                "pid" => (x.pid == 0).cmp(&(y.pid == 0)).then_with(|| x.pid.cmp(&y.pid)),
+                _ => lower_cmp(&x.display, &y.display),
+            };
+            let o = if desc { o.reverse() } else { o };
+            o.then_with(|| lower_cmp(&x.display, &y.display))
+        });
     }
 
     pub fn summary(&self) -> String {
@@ -222,7 +398,11 @@ impl Services {
 
 pub fn start_label(s: &ServiceInfo) -> String {
     if s.triggered && matches!(s.start, StartType::Manual | StartType::Automatic | StartType::AutomaticDelayed) {
-        format!("{} (trigger)", s.start.label())
+        match s.start.label().strip_suffix(")") {
+            // "Automatic (delayed)" becomes "Automatic (delayed, trigger)".
+            Some(open) => format!("{open}, trigger)"),
+            None => format!("{} (trigger)", s.start.label()),
+        }
     } else {
         s.start.label().into()
     }
@@ -312,6 +492,44 @@ mod tests {
         s.merge_states(vec![svc("alpha", ServiceState::Running, 42)]);
         assert_eq!(s.list[0].pid, 42);
         assert_eq!(s.list[0].account.as_deref(), Some("Local System"));
+    }
+
+    #[test]
+    fn services_sort_and_filter_by_startup_type() {
+        let mut s = Services::default();
+        let mut a = svc("alpha", ServiceState::Running, 300);
+        a.start = StartType::Automatic;
+        let mut b = svc("beta", ServiceState::Stopped, 0);
+        b.start = StartType::Disabled;
+        let c = svc("gamma", ServiceState::Running, 100);
+        s.set(vec![a, b, c]);
+        s.layout.sort = "pid".into();
+        s.apply_filter();
+        assert_eq!(s.rows().iter().map(|r| r.name.to_string()).collect::<Vec<_>>(), vec!["gamma", "alpha", "beta"]);
+        s.layout.desc = true;
+        s.apply_filter();
+        assert_eq!(s.rows()[0].name, "beta");
+        s.start_filter = 3;
+        s.apply_filter();
+        assert_eq!(s.rows().iter().map(|r| r.name.to_string()).collect::<Vec<_>>(), vec!["beta"]);
+    }
+
+    #[test]
+    fn a_stretching_column_is_pinned_once_and_sorting_flips() {
+        let mut t = TableLayout::default();
+        let (cols, fixed) = columns(&SERVICE_COLS, &t, SERVICE_SORT);
+        assert_eq!(cols[1].width, 0.0);
+        assert_eq!(fixed, 190.0 + 120.0 + 170.0 + 80.0);
+        assert_eq!(cols[1].sort, 1);
+        assert!(pin_stretch(&SERVICE_COLS, &mut t, 333.0));
+        assert!(!pin_stretch(&SERVICE_COLS, &mut t, 500.0));
+        assert_eq!(columns(&SERVICE_COLS, &t, SERVICE_SORT).0[1].width, 333.0);
+        sort_clicked(&SERVICE_COLS, &mut t, SERVICE_SORT, 1);
+        assert!(t.desc);
+        sort_clicked(&SERVICE_COLS, &mut t, SERVICE_SORT, 4);
+        assert_eq!((t.sort.as_str(), t.desc), ("pid", false));
+        resized(&SERVICE_COLS, &mut t, 0, 10.0);
+        assert_eq!(t.widths["name"], MIN_WIDTH as u32);
     }
 
     #[test]

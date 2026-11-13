@@ -1,4 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView } from "table.slint";
 import { Theme, Icons } from "theme.slint";
 import { App } from "state.slint";
 import { Icon, Button, Card, Toggle, Segmented, Select, SettingRow, SectionTitle, Divider } from "widgets.slint";
@@ -114,6 +114,15 @@ export component SettingsPage inherits Rectangle {
             }
 
             Group {
+                title: "Processes";
+                SettingRow {
+                    title: "Show memory in MB";
+                    description: "2,080.4 MB instead of 2.03 GB, so every row compares in the same unit.";
+                    Toggle { label: "Show memory in MB"; checked <=> App.memory-in-mb; toggled(v) => { App.setting-bool("memory-in-mb", v); } }
+                }
+            }
+
+            Group {
                 title: "Window";
                 SettingRow {
                     title: "Open on";
@@ -154,14 +163,33 @@ export component SettingsPage inherits Rectangle {
 
             Group {
                 title: "Compact monitor";
-                SettingRow {
-                    title: "Show";
-                    description: "The small always-on-top window (Ctrl+M).";
-                    HorizontalLayout {
-                        spacing: 6px;
-                        for m[i] in ["CPU", "Memory", "GPU", "Disk", "Network"]: Rectangle {
+                // Like a SettingRow, with the choices underneath so they can wrap onto a second line.
+                VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 10px;
+                    padding-bottom: 14px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        spacing: 0px;
+                        Text { text: "Show"; color: Theme.text; font-size: Theme.body; font-weight: 500; }
+                        Text {
+                            text: "The small always-on-top window (Ctrl+M). FPS is for the app in front, counted the way Xbox Game Bar counts it, and needs administrator rights or the permission Game Bar's FPS counter asks for. The CPU temperature needs PawnIO and Run as administrator.";
+                            color: Theme.secondary;
+                            font-size: Theme.small;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Rectangle {
+                        property <length> chip-w: 100px;
+                        property <length> gap: 6px;
+                        property <int> per-row: max(1, floor((self.width + self.gap) / (self.chip-w + self.gap)));
+                        height: ceil(7 / self.per-row) * (30px + self.gap) - self.gap;
+                        for m[i] in ["FPS", "CPU", "Memory", "GPU", "GPU memory", "Disk", "Network"]: Rectangle {
+                            x: mod(i, parent.per-row) * (parent.chip-w + parent.gap);
+                            y: floor(i / parent.per-row) * (30px + parent.gap);
                             height: 30px;
-                            width: mt.preferred-width + 22px;
+                            width: parent.chip-w;
                             border-radius: 15px;
                             background: App.compact-metrics[i] ? Theme.accent-soft : Theme.raised;
                             border-width: App.compact-metrics[i] ? 1px : 0px;
@@ -185,9 +213,9 @@ export component SettingsPage inherits Rectangle {
             Group {
                 title: "About";
                 SettingRow {
-                    title: "Bero Task Manager " + App.version;
+                    title: "Pulse " + App.version;
                     description: "Free software under the GNU GPL, version 3.";
-                    Button { text: "Source"; kind: 0; clicked => { App.open-url("https://github.com/Beroris/task-manager"); } }
+                    Button { text: "Source"; kind: 0; clicked => { App.open-url("https://github.com/Beroris/pulse"); } }
                 }
                 Divider { }
                 SettingRow {

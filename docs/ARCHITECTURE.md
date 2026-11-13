@@ -1,9 +1,9 @@
 # Architecture
 
-Bero Task Manager has three layers. Only the bottom one knows it's running on Windows.
+Pulse has three layers. Only the bottom one knows it's running on Windows.
 
 ```
-platforms/windows   bero-task-manager.exe: Windows counters, actions, tray, single instance
+platforms/windows   pulse.exe: Windows counters, actions, tray, single instance
         │ implements Sampler, MetaResolver, SystemControl (tm-core) and Shell (tm-app)
 crates/tm-app       the Slint interface and the controller that drives it
         │ uses
@@ -37,10 +37,12 @@ Everything here is plain data and maths, unit tested without real hardware.
 
 ## tm-app: the interface
 
-- `ui/*.slint` holds the views, one file per page plus shared widgets, theme and the global `App` state that the controller fills.
+- `ui/*.slint` holds the views, one file per page plus shared widgets, theme and the global `App` state that the controller fills. `table.slint` has the scroll view, its thin overlay scrollbars and the resizable header cell that every table and page shares.
+- Column widths: dragging an edge changes only that column. The column that fills the spare width (Name, or a table's main text column) gets a fixed width as soon as any drag starts, so it stops absorbing the change. A table wider than the view scrolls sideways. Widths and sort order are saved per table.
+- Text whose width changes every tick (summaries, counts, button labels) is set to elide or given a minimum width. Otherwise the layout's minimum width would follow the text and Windows would widen the window to fit it.
 - `ctrl.rs` is the controller. It runs on the UI thread, owns the main window, the compact monitor and the tray, and turns each new `Frame` into view data. It also carries out what the user asks for. Slow actions run on short-lived worker threads and post their results back through the event loop.
 - `procs.rs`, `pages.rs` and `lists.rs` turn data into rows and cards. They hold no windows, so they're tested directly.
-- The `Shell` trait (`lib.rs`) covers the few window details only a platform can provide: title bar colours, the accent colour, the animation and high-contrast settings, and native menu theming.
+- The `Shell` trait (`lib.rs`) covers the few window details only a platform can provide: title bar colours, the accent colour, the animation and high-contrast settings, native menu theming, and handing memory back to the system once no window is open.
 
 The UI never calls the OS for monitoring data. It only reads the collector's latest frame and histories.
 
@@ -50,15 +52,19 @@ The UI never calls the OS for monitoring data. It only reads the collector's lat
   - CPU and processes: `NtQuerySystemInformation`. One call returns every process, so no process has to be opened and no admin rights are needed.
   - Memory: `GlobalMemoryStatusEx` and `GetPerformanceInfo`, plus PDH for the standby and modified lists and the pools.
   - Disks: `IOCTL_DISK_PERFORMANCE`, through a handle opened with no access rights and closed straight away.
-  - Network: `GetIfEntry2`.
+  - Network: `GetIfEntry2`. Only adapters that are hardware or have a usable address (not link-local) are shown, so WAN Miniports, filter drivers and idle virtual switches stay out of the list.
+  - CPU temperature and power (`cpusensor.rs`): through PawnIO, if it's installed and the app is elevated, since only administrators can open its device. It loads the signed `AMDFamily17` or `IntelMSR` module built into the exe. On AMD it reads Tctl from SMN `0x59800`, decoded as Linux's k10temp does, while holding the `Global\Access_PCI` mutex other hardware tools use. On Intel it reads TjMax minus the thermal status readout. Power comes from the package energy counter on both. Otherwise the reading says why there is none (no driver, needs admin, unsupported CPU), and the UI shows that.
+  - Frame rate (`fps.rs`): a real-time ETW session on the DXGI, Direct3D 9 and DxgKrnl providers, filtered by event ID to presents only. It counts presents per process over the last second. The app shown is the one in front, or the child process drawing for it (browsers and Electron apps), or the one shown last while the app in front draws nothing. The session only runs while FPS is on screen. A session outlives its process, so it's stopped on pause and on exit, and a leftover one is replaced. It needs administrator rights or membership of Performance Log Users.
   - GPU: D3DKMT statistics, the same source Windows Task Manager reads, plus DXGI for names and sizes. Reading an engine is slow on some drivers, so engines that have been idle for a while are read every few seconds instead of every tick, unless the GPU view is open.
 - `meta.rs` reads paths, owners, version info and icons.
 - `control.rs` carries out actions:
   - End task posts `WM_CLOSE` to the program's windows. Force end is `TerminateProcess`.
   - When Windows answers "access denied", the action comes back as `NeedsElevation`. If you agree, the same action runs again in a short-lived elevated copy of the exe (`--admin-action`). That copy repeats the safety checks, then exits. The app itself stays unelevated.
+  - Clear standby enables `SeProfileSingleProcessPrivilege`, which only an elevated token holds, and asks `NtSetSystemInformation` to purge the standby list. Unelevated, it goes through the same `--admin-action` copy.
 - `startup.rs` covers the Run keys, the Startup folders and Store apps' startup tasks. Disabling writes the same `StartupApproved` flag Windows uses, so nothing is ever deleted.
 - `services.rs` talks to the Service Control Manager.
-- `instance.rs` keeps one copy running: a named mutex, plus a message-only window that receives `show` and `quit` from later launches.
+- `instance.rs` keeps one copy running (development builds use their own names, so one can run beside an installed copy): a named mutex, plus a message-only window that receives `show` and `quit` from later launches. If a `quit` hasn't closed the app within 5 s, the app ends itself anyway, so an installer never waits on a copy that has stopped responding.
+- `main.rs` ends the process with `TerminateProcess` once the event loop returns and settings are saved. A normal exit tears down thread-locals after Windows has already stopped the worker threads. The collector's handle then waits on threads that are gone and panics, which made every exit a crash.
 - `shell.rs` sets the DWM title bar and border colours, reads the theme and accent, and themes native menus.
 
 ## Porting to macOS

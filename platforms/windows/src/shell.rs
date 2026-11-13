@@ -10,6 +10,8 @@ use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect};
+use windows::Win32::System::Memory::{SETPROCESSWORKINGSETSIZEEX_FLAGS, SetProcessWorkingSetSizeEx};
+use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, KEY_READ};
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -119,5 +121,12 @@ impl Shell for WinShell {
         // The top strip must be on a monitor, so the window can always be grabbed and moved.
         let r = RECT { left: x + 8, top: y, right: x + (width as i32).max(48) - 8, bottom: y + 32.min(height as i32).max(8) };
         !unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONULL) }.is_invalid()
+    }
+
+    fn release_memory(&self) {
+        // Takes the app's pages out of RAM. The ones it still uses come back on their next use,
+        // from memory Windows keeps for that, so this frees RAM the hidden windows were holding
+        // without changing what the app has committed.
+        let _ = unsafe { SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, SETPROCESSWORKINGSETSIZEEX_FLAGS(0)) };
     }
 }

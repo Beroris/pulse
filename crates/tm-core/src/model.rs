@@ -151,6 +151,9 @@ pub struct RawSample {
     pub thermal: Vec<ThermalReading>,
     pub uptime_secs: Option<u64>,
     pub handles: Option<u64>,
+    /// Frame rate of the app in front, when asked for and it is drawing.
+    pub fps: Option<FpsNow>,
+    pub fps_access: FpsAccess,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -159,6 +162,45 @@ pub struct RawCpu {
     pub cores: Vec<CpuTimes>,
     /// Current speed as a percentage of base speed, when the OS reports it.
     pub performance_pct: Option<f32>,
+    /// Package power from the CPU's own energy counter, when it can be read.
+    pub power_w: Option<f32>,
+    /// Whether the CPU's own sensors could be read. `Unknown` when sensors weren't asked for.
+    pub sensor: SensorAccess,
+}
+
+/// Whether the CPU's own temperature and power sensors can be read, and if not, why.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SensorAccess {
+    /// Not tried: sensors weren't asked for.
+    #[default]
+    Unknown,
+    Ok,
+    /// Nothing that can read them is installed.
+    NoDriver,
+    /// A driver that can read them is installed, but only administrators may use it.
+    NeedsAdmin,
+    /// The driver is installed but doesn't support this CPU, or failed.
+    Unsupported,
+}
+
+/// Frames the app in front presented over the last second.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FpsNow {
+    pub pid: u32,
+    /// Its executable's name, without ".exe".
+    pub name: Arc<str>,
+    pub fps: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FpsAccess {
+    /// Not counting frames.
+    #[default]
+    Off,
+    Ok,
+    /// Windows lets only administrators and members of Performance Log Users trace frames.
+    NeedsPermission,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -273,6 +315,8 @@ pub struct CpuNow {
     pub cores: Vec<Option<f32>>,
     pub speed_mhz: Option<u32>,
     pub temperature_c: Option<f32>,
+    pub power_w: Option<f32>,
+    pub sensor: SensorAccess,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -430,4 +474,6 @@ pub struct Frame {
     pub process_gpu: bool,
     pub thermal: Vec<ThermalReading>,
     pub insights: Vec<crate::insights::Insight>,
+    pub fps: Option<FpsNow>,
+    pub fps_access: FpsAccess,
 }

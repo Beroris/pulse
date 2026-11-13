@@ -1,12 +1,16 @@
-import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { App } from "state.slint";
-import { ServiceRow } from "types.slint";
+import { ServiceRow, ColumnData } from "types.slint";
 import { Icon, IconButton, Button, SearchBox, Segmented, Card, Badge, Select, Divider } from "widgets.slint";
+import { ListView, ScrollView, HeaderCell } from "table.slint";
 
+// Columns, in the order the controller sends them: name, display name, status, startup type, PID.
 component ServiceItem inherits Rectangle {
     in property <ServiceRow> data;
     in property <int> index;
+    in property <[ColumnData]> cols;
+    in property <length> fill-w;
+    property <length> w1: cols[1].width > 0 ? cols[1].width : fill-w;
     height: 34px;
     background: data.selected ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
@@ -14,23 +18,38 @@ component ServiceItem inherits Rectangle {
     accessible-item-selected: data.selected;
     ta := TouchArea { clicked => { App.service-select(root.index); } }
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 10px;
-        Text { text: root.data.name; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; width: 22%; overflow: elide; }
-        Text { text: root.data.display; color: Theme.text; font-size: Theme.body; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        alignment: start;
+        Rectangle {
+            width: root.cols[0].width;
+            Text { x: 12px; width: parent.width - 22px; text: root.data.name; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; overflow: elide; }
+        }
+        Rectangle {
+            width: root.w1;
+            Text { x: 10px; width: parent.width - 20px; text: root.data.display; color: Theme.text; font-size: Theme.body; vertical-alignment: center; overflow: elide; }
+        }
         HorizontalLayout {
-            width: 96px;
+            width: root.cols[2].width;
+            padding-left: 10px;
+            padding-right: 10px;
             spacing: 6px;
             Rectangle { width: 7px; height: 7px; border-radius: 3.5px; y: (parent.height - self.height) / 2; background: root.data.running ? Theme.good : Theme.tertiary.with-alpha(0.5); }
-            Text { text: root.data.status; color: root.data.running ? Theme.text : Theme.secondary; font-size: Theme.small; vertical-alignment: center; }
+            Text { text: root.data.status; color: root.data.running ? Theme.text : Theme.secondary; font-size: Theme.small; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
         }
-        Text { text: root.data.start; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; width: 130px; overflow: elide; }
-        Text { text: root.data.pid; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; horizontal-alignment: right; width: 56px; }
+        Rectangle {
+            width: root.cols[3].width;
+            Text { x: 10px; width: parent.width - 20px; text: root.data.start; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; overflow: elide; }
+        }
+        Rectangle {
+            width: root.cols[4].width;
+            Text { x: 10px; width: parent.width - 20px; text: root.data.pid; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; horizontal-alignment: right; overflow: elide; }
+        }
     }
 }
 
 export component ServicesPage inherits Rectangle {
+    property <length> fixed: App.service-fixed-width;
+    property <length> fill-w: max(180px, lv.visible-width - fixed - 6px);
+    property <length> content-w: (App.service-columns[1].width > 0 ? App.service-columns[1].width : fill-w) + fixed;
     VerticalLayout {
         padding: 28px;
         padding-top: 24px;
@@ -41,12 +60,15 @@ export component ServicesPage inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 spacing: -2px;
-                Text { text: "Services"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
-                Text { text: App.services-summary; color: Theme.tertiary; font-size: Theme.small; }
+                min-width: 90px;
+                horizontal-stretch: 1;
+                Text { text: "Services"; color: Theme.text; font-size: Theme.title; font-weight: 600; overflow: elide; }
+                Text { text: App.services-summary; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
             }
-            Rectangle { horizontal-stretch: 1; }
             SearchBox {
-                width: 260px;
+                min-width: 140px;
+                preferred-width: 240px;
+                horizontal-stretch: 0;
                 y: (parent.height - self.height) / 2;
                 placeholder: "Search services";
                 text <=> App.services-search;
@@ -59,6 +81,14 @@ export component ServicesPage inherits Rectangle {
                 selected <=> App.services-filter;
                 changed(i) => { App.services-filter-changed(i); }
             }
+            Select {
+                y: (parent.height - self.height) / 2;
+                width: 160px;
+                label: "Startup type";
+                options: ["Any startup type", "Automatic", "Manual", "Disabled"];
+                selected <=> App.services-start-filter;
+                changed(i) => { App.services-start-filter-changed(i); }
+            }
             IconButton { icon: Icons.restart; tip: "Refresh"; y: (parent.height - self.height) / 2; clicked => { App.services-refresh(); } }
         }
         HorizontalLayout {
@@ -66,24 +96,42 @@ export component ServicesPage inherits Rectangle {
             Card {
                 horizontal-stretch: 1;
                 clip: true;
-                VerticalLayout {
-                    HorizontalLayout {
-                        height: 36px;
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 10px;
-                        Text { text: "Name"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; width: 22%; }
-                        Text { text: "Display name"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; horizontal-stretch: 1; }
-                        Text { text: "Status"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; width: 96px; }
-                        Text { text: "Startup type"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; width: 130px; }
-                        Text { text: "PID"; color: Theme.secondary; font-size: Theme.small; font-weight: 500; vertical-alignment: center; horizontal-alignment: right; width: 56px; }
+                // Right-click the header to put the columns back.
+                ContextMenuArea {
+                    y: 0;
+                    height: 40px;
+                    Menu {
+                        MenuItem { title: "Reset column widths"; activated => { App.service-columns-reset(); } }
                     }
-                    Divider { }
-                    ListView {
-                        for r[i] in App.service-rows: ServiceItem { data: r; index: i; }
+                    Rectangle {
+                        y: 0;
+                        height: 40px;
+                        clip: true;
+                        HorizontalLayout {
+                            x: lv.content-x;
+                            width: root.content-w;
+                            alignment: start;
+                            for c[i] in App.service-columns: HeaderCell {
+                                width: c.width > 0 ? c.width : root.fill-w;
+                                row-height: 40px;
+                                pad-left: i == 0 ? 12px : 10px;
+                                column: c;
+                                clicked => { App.service-sort(i); }
+                                resize-started => { App.service-resize-started(root.fill-w); }
+                                resized(w) => { App.service-resized(i, w); }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.divider; }
                     }
                 }
+                lv := ListView {
+                    y: 40px;
+                    height: parent.height - 40px;
+                    content-width: max(self.visible-width, root.content-w);
+                    for r[i] in App.service-rows: ServiceItem { data: r; index: i; cols: App.service-columns; fill-w: root.fill-w; }
+                }
                 if App.services-loading && App.service-rows.length == 0: Text { y: 80px; width: parent.width; horizontal-alignment: center; text: "Reading services…"; color: Theme.tertiary; }
+                if !App.services-loading && App.service-rows.length == 0: Text { y: 80px; width: parent.width; horizontal-alignment: center; text: "Nothing matches."; color: Theme.tertiary; }
             }
             if App.service-selected >= 0: Card {
                 width: 360px;

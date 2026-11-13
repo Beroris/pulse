@@ -37,7 +37,8 @@ const SWATCHES: [Rgb; 8] = [
     (0x8b, 0x5c, 0xf6),
     (0x94, 0xa3, 0xb8),
 ];
-const METRICS: [Metric; 5] = [Metric::Cpu, Metric::Memory, Metric::Gpu, Metric::Disk, Metric::Network];
+/// In the order the compact monitor shows them, and Settings lists them.
+const METRICS: [Metric; 7] = [Metric::Fps, Metric::Cpu, Metric::Memory, Metric::Gpu, Metric::GpuMemory, Metric::Disk, Metric::Network];
 const DARK_BG: Rgb = (0x13, 0x13, 0x15);
 const LIGHT_BG: Rgb = (0xfa, 0xfa, 0xfb);
 
@@ -80,7 +81,9 @@ struct Models {
     fixed: Rc<VecModel<StatData>>,
     segments: Rc<VecModel<Segment>>,
     startup: Rc<VecModel<StartupRow>>,
+    startup_cols: Rc<VecModel<ColumnData>>,
     services: Rc<VecModel<ServiceRow>>,
+    service_cols: Rc<VecModel<ColumnData>>,
     service_facts: Rc<VecModel<StatData>>,
     compact_on: Rc<VecModel<bool>>,
     swatches: Rc<VecModel<Swatch>>,
@@ -104,7 +107,9 @@ impl Models {
             fixed: Rc::default(),
             segments: Rc::default(),
             startup: Rc::default(),
+            startup_cols: Rc::default(),
             services: Rc::default(),
+            service_cols: Rc::default(),
             service_facts: Rc::default(),
             compact_on: Rc::default(),
             swatches: Rc::default(),
@@ -162,6 +167,7 @@ pub struct Ctrl {
     notice_timer: Timer,
     services_timer: Timer,
     theme_timer: Timer,
+    trim_timer: Timer,
 }
 
 macro_rules! cb {
@@ -273,6 +279,7 @@ pub fn run(p: Platform) -> Result<(), slint::PlatformError> {
         notice_timer: Timer::default(),
         services_timer: Timer::default(),
         theme_timer: Timer::default(),
+        trim_timer: Timer::default(),
     });
     {
         let mut st = c.st.borrow_mut();
@@ -292,7 +299,7 @@ fn initial_demand(st: &State, main: bool) -> Demand {
 /// What to sample for what is on screen. `gpu_open`: the Performance page is showing a GPU.
 fn compute_demand(s: &Settings, page: Page, main: bool, compact: bool, gpu_open: bool) -> Demand {
     if !main && !compact && s.background == Background::Pause {
-        return Demand { processes: false, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, gpu_engines: false, paused: true };
+        return Demand { processes: false, windows: false, services: false, process_gpu: false, memory_detail: false, sensors: false, gpu_engines: false, fps: false, paused: true };
     }
     let on_procs = main && page == Page::Processes;
     Demand {
@@ -304,6 +311,7 @@ fn compute_demand(s: &Settings, page: Page, main: bool, compact: bool, gpu_open:
         sensors: !s.reduced && ((main && matches!(page, Page::Overview | Page::Performance)) || compact),
         // Each engine has its own graph there. Elsewhere only the busiest engine is shown.
         gpu_engines: main && page == Page::Performance && gpu_open,
+        fps: compact && s.compact.metrics.contains(&Metric::Fps),
         paused: false,
     }
 }
@@ -336,7 +344,15 @@ impl Ctrl {
         app.set_perf_static(model(&self.m.fixed));
         app.set_perf_segments(model(&self.m.segments));
         app.set_startup_rows(model(&self.m.startup));
+        app.set_startup_columns(model(&self.m.startup_cols));
         app.set_service_rows(model(&self.m.services));
+        app.set_service_columns(model(&self.m.service_cols));
+        {
+            let mut st = self.st.borrow_mut();
+            st.startup.layout = st.s.startup_table.clone();
+            st.services.layout = st.s.services_table.clone();
+        }
+        self.push_table_columns();
         app.set_service_facts(model(&self.m.service_facts));
         app.set_compact_metrics(model(&self.m.compact_on));
         app.set_swatches(model(&self.m.swatches));
@@ -431,6 +447,7 @@ impl Ctrl {
             ViewMode::List => 2,
         });
         app.set_friendly_names(s.friendly_names);
+        app.set_memory_in_mb(s.memory_in_mb);
         app.set_perf_per_core(s.cpu_per_core);
         util::sync(&self.m.compact_on, METRICS.iter().map(|m| s.compact.metrics.contains(m)).collect());
         util::sync(&self.m.column_on, Column::OPTIONAL.iter().map(|c| s.columns.contains(c)).collect());
@@ -474,6 +491,12 @@ impl Ctrl {
         cb!(c, app, on_sort_by, |i| c.sort_by(i));
         cb!(c, app, on_column_toggled, |i| c.toggle_column(i));
         cb!(c, app, on_column_resized, |i, w| c.resize_column(i, w));
+        cb!(c, app, on_column_resize_started, |name_w| c.pin_name_column(name_w));
+        cb!(c, app, on_columns_reset, | | {
+            c.st.borrow_mut().s.widths.clear();
+            c.save_soon();
+            c.update_columns()
+        });
         cb!(c, app, on_row_pressed, |i, ctrl, shift| {
             c.st.borrow_mut().table.press(i.max(0) as usize, ctrl, shift);
             c.update_table();
@@ -492,8 +515,10 @@ impl Ctrl {
             c.update_table()
         });
         cb!(c, app, on_row_activated, |i| {
-            let is_proc = matches!(c.st.borrow().table.rows.get(i.max(0) as usize).map(|r| &r.id), Some(RowId::Proc(_)));
-            if is_proc {
+            // A double-click opens the details of a process or an app; on a section heading
+            // (Apps, Background processes…) it opens or closes the section.
+            let is_section = matches!(c.st.borrow().table.rows.get(i.max(0) as usize).map(|r| &r.id), Some(RowId::Section(_)));
+            if !is_section {
                 c.show_details();
             } else {
                 c.st.borrow_mut().table.toggle(i.max(0) as usize);
@@ -602,6 +627,39 @@ impl Ctrl {
             }
         });
         cb!(c, app, on_startup_refresh, | | c.load_startup(true));
+        cb!(c, app, on_startup_filter_changed, | | {
+            {
+                let app = c.app();
+                let mut st = c.st.borrow_mut();
+                st.startup.show = app.get_startup_filter();
+                st.startup.location = app.get_startup_location();
+                st.startup.filter();
+            }
+            c.render_startup(true)
+        });
+        cb!(c, app, on_startup_sort, |i| {
+            {
+                let mut st = c.st.borrow_mut();
+                lists::sort_clicked(&lists::STARTUP_COLS, &mut st.startup.layout, lists::STARTUP_SORT, i.max(0) as usize);
+                st.startup.filter();
+            }
+            c.table_layout_changed();
+            c.render_startup(true)
+        });
+        cb!(c, app, on_startup_resize_started, |w| {
+            let changed = lists::pin_stretch(&lists::STARTUP_COLS, &mut c.st.borrow_mut().startup.layout, w);
+            if changed {
+                c.table_layout_changed();
+            }
+        });
+        cb!(c, app, on_startup_resized, |i, w| {
+            lists::resized(&lists::STARTUP_COLS, &mut c.st.borrow_mut().startup.layout, i.max(0) as usize, w);
+            c.table_layout_changed()
+        });
+        cb!(c, app, on_startup_columns_reset, | | {
+            c.st.borrow_mut().startup.layout.widths.clear();
+            c.table_layout_changed()
+        });
 
         // Services
         cb!(c, app, on_services_search_edited, |t| {
@@ -637,6 +695,38 @@ impl Ctrl {
         });
         cb!(c, app, on_service_go_to_process, | | c.service_go_to_process());
         cb!(c, app, on_services_refresh, | | c.load_services(true));
+        cb!(c, app, on_services_start_filter_changed, |i| {
+            {
+                let mut st = c.st.borrow_mut();
+                st.services.start_filter = i;
+                st.services.apply_filter();
+            }
+            c.render_services()
+        });
+        cb!(c, app, on_service_sort, |i| {
+            {
+                let mut st = c.st.borrow_mut();
+                lists::sort_clicked(&lists::SERVICE_COLS, &mut st.services.layout, lists::SERVICE_SORT, i.max(0) as usize);
+                st.services.apply_filter();
+            }
+            c.table_layout_changed();
+            c.render_services()
+        });
+        cb!(c, app, on_service_resize_started, |w| {
+            let changed = lists::pin_stretch(&lists::SERVICE_COLS, &mut c.st.borrow_mut().services.layout, w);
+            if changed {
+                c.table_layout_changed();
+            }
+        });
+        cb!(c, app, on_service_resized, |i, w| {
+            lists::resized(&lists::SERVICE_COLS, &mut c.st.borrow_mut().services.layout, i.max(0) as usize, w);
+            c.table_layout_changed()
+        });
+        cb!(c, app, on_service_columns_reset, | | {
+            c.st.borrow_mut().services.layout.widths.clear();
+            c.table_layout_changed()
+        });
+        cb!(c, app, on_clear_standby, | | c.clear_standby());
 
         // Settings
         cb!(c, app, on_setting_int, |k, v| c.setting_int(&k, v));
@@ -690,21 +780,16 @@ impl Ctrl {
             // The compact monitor keeps the app open on its own; otherwise only the tray can.
             let to_tray = { let st = c.st.borrow(); (st.s.tray_icon && st.s.close_to_tray) || st.compact_shown };
             if to_tray {
-                c.capture_placement();
-                {
-                    let mut st = c.st.borrow_mut();
-                    st.main_shown = false;
-                }
-                c.update_demand();
-                c.save_soon();
-                CloseRequestResponse::HideWindow
+                // Hidden right after, the same way as from the tray, which keeps its placement.
+                Timer::single_shot(Duration::ZERO, || with(|c| c.hide_main()));
+                CloseRequestResponse::KeepWindowShown
             } else {
                 c.quit();
                 CloseRequestResponse::KeepWindowShown
             }
         });
         let w = Rc::downgrade(self);
-        self.main.window().on_winit_window_event(move |window, event| {
+        self.main.window().on_winit_window_event(move |_window, event| {
             let Some(c) = w.upgrade() else { return EventResult::Propagate };
             c.setup_if_pending();
             match event {
@@ -716,16 +801,10 @@ impl Ctrl {
                         // Changing windows inside the event filter isn't safe: do it right after.
                         Timer::single_shot(Duration::ZERO, move || with(|c| c.minimized_changed(minimized)));
                     }
-                    if !minimized && !window.is_maximized() {
-                        let pos = window.position();
-                        c.st.borrow_mut().normal = Some((pos.x, pos.y, size.width, size.height));
-                    }
+                    Timer::single_shot(Duration::ZERO, || with(|c| c.note_normal_placement()));
                 }
-                winit::event::WindowEvent::Moved(pos) => {
-                    let size = window.size();
-                    if size.width > 0 && !window.is_maximized() && !window.is_minimized() {
-                        c.st.borrow_mut().normal = Some((pos.x, pos.y, size.width, size.height));
-                    }
+                winit::event::WindowEvent::Moved(_) => {
+                    Timer::single_shot(Duration::ZERO, || with(|c| c.note_normal_placement()));
                 }
                 winit::event::WindowEvent::ScaleFactorChanged { .. } => {
                     Timer::single_shot(Duration::ZERO, || with(|c| c.apply_scale()));
@@ -820,6 +899,7 @@ impl Ctrl {
         app.set_perf_title(detail.title.into());
         app.set_perf_subtitle(detail.subtitle.into());
         app.set_perf_is_cpu(detail.is_cpu);
+        app.set_perf_is_memory(matches!(self.st.borrow().device, DevKey::Memory));
         util::sync(&self.m.graphs, detail.graphs);
         util::sync(&self.m.cores, detail.cores);
         util::sync(&self.m.live, detail.live);
@@ -868,9 +948,8 @@ impl Ctrl {
         let mut guard = self.st.borrow_mut();
         let st = &mut *guard;
         st.table.rebuild(&st.s);
-        let cx = CellContext { frame: &st.frame, mem_total: st.frame.mem.map_or(st.info.mem.total, |m| m.total), icons: &st.icons };
+        let cx = CellContext { frame: &st.frame, mem_total: st.frame.mem.map_or(st.info.mem.total, |m| m.total), icons: &st.icons, mem_mb: st.s.memory_in_mb };
         let rows = st.table.view_rows(&st.s, &cx);
-        let (name_col, cols, total) = st.table.columns(&st.s, &st.frame);
         let summary = st.table.summary(&st.frame);
         let procs = st.table.selected_procs();
         let count = procs.len() as i32;
@@ -886,9 +965,7 @@ impl Ctrl {
         };
         drop(guard);
         self.m.rows.push(rows);
-        util::sync(&self.m.columns, cols);
-        app.set_name_column(name_col);
-        app.set_columns_width(total);
+        self.update_columns();
         app.set_process_summary(summary.into());
         app.set_selection_count(count);
         app.set_selection_can_end(can_end);
@@ -896,6 +973,36 @@ impl Ctrl {
         app.set_selection_has_path(has_path);
         app.set_selection_is_group(is_group);
         app.set_selection_priority(priority);
+    }
+
+    /// Pushes column titles, totals and widths, without rebuilding the rows.
+    fn update_columns(&self) {
+        let app = self.app();
+        let (name_col, cols, total) = {
+            let st = self.st.borrow();
+            st.table.columns(&st.s, &st.frame)
+        };
+        util::sync(&self.m.columns, cols);
+        app.set_name_column(name_col);
+        app.set_columns_width(total);
+    }
+
+    /// Before any column is resized, Name stops filling the leftover room and keeps the width it
+    /// has, so dragging one edge moves only that edge.
+    fn pin_name_column(&self, name_w: f32) {
+        let pinned = {
+            let mut st = self.st.borrow_mut();
+            let s = &mut st.s;
+            if s.widths.contains_key(&Column::Name) {
+                false
+            } else {
+                s.widths.insert(Column::Name, name_w.clamp(procs::NAME_MIN, 2000.0).round() as u32);
+                true
+            }
+        };
+        if pinned {
+            self.update_columns();
+        }
     }
 
     fn scroll_to(&self, i: usize) {
@@ -955,12 +1062,12 @@ impl Ctrl {
             let mut st = self.st.borrow_mut();
             let col = if i <= 0 { Some(Column::Name) } else { st.s.columns.get(i as usize - 1).copied() };
             if let Some(col) = col {
-                let min = if col == Column::Name { 160.0 } else { 48.0 };
-                st.s.widths.insert(col, w.clamp(min, 1200.0).round() as u32);
+                let min = if col == Column::Name { procs::NAME_MIN } else { 48.0 };
+                st.s.widths.insert(col, w.clamp(min, 1600.0).round() as u32);
             }
         }
         self.save_soon();
-        self.update_table();
+        self.update_columns();
     }
 
     // ─── Details panel ─────────────────────────────────────────────────────
@@ -1355,8 +1462,34 @@ impl Ctrl {
                 c.collector.send(Command::StartupCount(Some(count)));
                 c.app().set_startup_loading(false);
                 c.render_startup(true);
+                // The first read runs a few seconds after launch, which may be at sign-in with no
+                // window open: hand back what it took once it's done.
+                c.release_when_idle();
             });
         });
+    }
+
+    /// Column titles, sort arrows and widths of the startup and services tables.
+    fn push_table_columns(&self) {
+        let app = self.app();
+        let st = self.st.borrow();
+        let (cols, fixed) = lists::columns(&lists::STARTUP_COLS, &st.startup.layout, lists::STARTUP_SORT);
+        util::sync(&self.m.startup_cols, cols);
+        app.set_startup_fixed_width(fixed);
+        let (cols, fixed) = lists::columns(&lists::SERVICE_COLS, &st.services.layout, lists::SERVICE_SORT);
+        util::sync(&self.m.service_cols, cols);
+        app.set_service_fixed_width(fixed);
+    }
+
+    /// A table was sorted or a column resized: show it and keep it for next time.
+    fn table_layout_changed(&self) {
+        {
+            let mut st = self.st.borrow_mut();
+            st.s.startup_table = st.startup.layout.clone();
+            st.s.services_table = st.services.layout.clone();
+        }
+        self.push_table_columns();
+        self.save_soon();
     }
 
     fn render_startup(&self, rebuild: bool) {
@@ -1564,6 +1697,34 @@ impl Ctrl {
         });
     }
 
+    // ─── Memory ────────────────────────────────────────────────────────────
+
+    fn clear_standby(self: &Rc<Self>) {
+        let elevated = self.st.borrow().elevated;
+        let admin = if elevated { "" } else { " Windows will ask for administrator rights." };
+        self.ask(
+            "Clear standby memory?",
+            &format!(
+                "Standby memory holds files and programs you used recently, so they open quickly next time. Windows gives it to any program that needs memory, so it isn't wasted and doesn't slow anything down.\n\nClearing it shows that memory as free straight away. The cost: what you open next loads from disk again, so things can feel slower for a while until Windows fills it back up. It rarely helps, except to measure something from a cold start.{admin}"
+            ),
+            Vec::new(),
+            "Clear standby",
+            false,
+            !elevated,
+            |c| {
+                let control = c.control.clone();
+                std::thread::spawn(move || {
+                    let r = control.clear_standby(true);
+                    post(move |c| match r {
+                        Ok(()) => c.notice("Standby memory cleared.", 0),
+                        Err(ActionError::Cancelled) => {}
+                        Err(e) => c.notice(&format!("Couldn't clear standby memory. {}", e.message()), 2),
+                    });
+                });
+            },
+        );
+    }
+
     fn service_go_to_process(self: &Rc<Self>) {
         let pid = self.st.borrow().services.selected_info().map(|s| s.pid).filter(|p| *p != 0);
         let Some(pid) = pid else { return };
@@ -1740,7 +1901,7 @@ impl Ctrl {
             "compact-metric" => {
                 {
                     let mut st = self.st.borrow_mut();
-                    let m = METRICS[i.min(4)];
+                    let m = METRICS[i.min(METRICS.len() - 1)];
                     let list = &mut st.s.compact.metrics;
                     if list.contains(&m) {
                         if list.len() > 1 {
@@ -1752,6 +1913,7 @@ impl Ctrl {
                     }
                 }
                 self.push_settings();
+                self.update_demand();
                 self.render_compact();
             }
             _ => {}
@@ -1790,6 +1952,11 @@ impl Ctrl {
                 }
             }
             "close-to-tray" => self.st.borrow_mut().s.close_to_tray = v,
+            "memory-in-mb" => {
+                self.st.borrow_mut().s.memory_in_mb = v;
+                self.app().set_memory_in_mb(v);
+                self.update_table();
+            }
             "minimize-to-tray" => self.st.borrow_mut().s.minimize_to_tray = v,
             "click-through" => {
                 self.st.borrow_mut().s.compact.click_through = v;
@@ -1924,8 +2091,24 @@ impl Ctrl {
         }
     }
 
+    /// Remembers the main window's size and position while it's neither maximized nor minimized.
+    /// Runs after the events that moved or resized it: when a window is maximized, Windows reports
+    /// the move before the resize, and only after both does the window say it's maximized.
+    fn note_normal_placement(&self) {
+        let w = self.main.window();
+        let Some((maximized, minimized)) = w.with_winit_window(|ww| (ww.is_maximized(), ww.is_minimized().unwrap_or(false))) else { return };
+        let size = w.size();
+        if maximized || minimized || size.width == 0 || size.height == 0 {
+            return;
+        }
+        let pos = w.position();
+        self.st.borrow_mut().normal = Some((pos.x, pos.y, size.width, size.height));
+    }
+
     fn capture_placement(&self) {
         let w = self.main.window();
+        // Slint's flag, which minimizing leaves alone (it ignores the zero-size resize), so a
+        // maximized window closed while minimized still comes back maximized.
         let maximized = w.is_maximized();
         let mut st = self.st.borrow_mut();
         if !st.s.remember_window {
@@ -2005,6 +2188,21 @@ impl Ctrl {
         self.st.borrow_mut().main_shown = false;
         self.update_demand();
         self.save_soon();
+        self.release_when_idle();
+    }
+
+    /// Once no window is left open, hands memory the app isn't using back to Windows. Asking
+    /// again before it ran pushes it back, so it runs once.
+    fn release_when_idle(&self) {
+        // After the hidden windows' own clean-up has run.
+        self.trim_timer.start(TimerMode::SingleShot, Duration::from_millis(1500), || {
+            with(|c| {
+                let idle = { let st = c.st.borrow(); !st.main_shown && !st.compact_shown && !st.quitting };
+                if idle {
+                    c.shell.release_memory();
+                }
+            })
+        });
     }
 
     fn minimized_changed(self: &Rc<Self>, minimized: bool) {
@@ -2105,6 +2303,8 @@ impl Ctrl {
         if nothing_left && self.tray.borrow().is_none() {
             // No window and no tray icon: nothing left to come back to.
             self.quit();
+        } else if nothing_left {
+            self.release_when_idle();
         }
     }
 

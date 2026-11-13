@@ -10,7 +10,10 @@ use tm_core::platform::*;
 use tm_core::safety::{self, Protection};
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessCommandLineInformation};
 use windows::Win32::Foundation::*;
-use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+use windows::Win32::Security::{
+    AdjustTokenPrivileges, GetTokenInformation, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    TokenElevation,
+};
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
@@ -209,11 +212,50 @@ fn efficiency_mode(h: HANDLE) -> Option<bool> {
     Some(s.ControlMask & 1 != 0 && s.StateMask & 1 != 0)
 }
 
+// ─── Memory ────────────────────────────────────────────────────────────────
+
+#[link(name = "ntdll", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn NtSetSystemInformation(class: i32, info: *mut core::ffi::c_void, len: u32) -> i32;
+}
+
+const SYSTEM_MEMORY_LIST_INFORMATION: i32 = 80;
+const MEMORY_PURGE_STANDBY_LIST: u32 = 4;
+
+/// Turns on one of this process’s privileges. Only privileges the token holds can be turned on;
+/// a normal user’s token doesn’t hold the one needed here, an elevated one does.
+fn enable_privilege(name: PCWSTR) -> ActionResult {
+    let mut token = HANDLE::default();
+    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token) }.map_err(|e| ActionError::Failed(e.message()))?;
+    let token = Owned(token);
+    let mut luid = LUID::default();
+    unsafe { LookupPrivilegeValueW(PCWSTR::null(), name, &mut luid) }.map_err(|e| ActionError::Failed(e.message()))?;
+    let tp = TOKEN_PRIVILEGES { PrivilegeCount: 1, Privileges: [LUID_AND_ATTRIBUTES { Luid: luid, Attributes: SE_PRIVILEGE_ENABLED }] };
+    unsafe { AdjustTokenPrivileges(token.get(), false, Some(&tp), 0, None, None) }.map_err(|e| ActionError::Failed(e.message()))?;
+    // It succeeds even when the privilege isn’t held, and says so only here.
+    if unsafe { GetLastError() } == ERROR_NOT_ALL_ASSIGNED {
+        return Err(ActionError::NeedsElevation("Windows only lets administrators clear standby memory.".into()));
+    }
+    Ok(())
+}
+
+pub fn clear_standby_now() -> ActionResult {
+    enable_privilege(w!("SeProfileSingleProcessPrivilege"))?;
+    let mut command = MEMORY_PURGE_STANDBY_LIST;
+    let status = unsafe { NtSetSystemInformation(SYSTEM_MEMORY_LIST_INFORMATION, &mut command as *mut u32 as *mut _, 4) };
+    match status as u32 {
+        0 => Ok(()),
+        // STATUS_PRIVILEGE_NOT_HELD, STATUS_ACCESS_DENIED
+        0xC000_0061 | 0xC000_0022 => Err(ActionError::NeedsElevation("Windows only lets administrators clear standby memory.".into())),
+        s => Err(ActionError::Failed(format!("Windows refused (status 0x{s:08X}).",))),
+    }
+}
+
 // ─── The elevated helper ───────────────────────────────────────────────────
 
 /// Runs `args` in an elevated copy of this exe and waits for it. Windows shows its consent prompt.
 fn elevated(args: &[String]) -> ActionResult {
-    let result_file = std::env::temp_dir().join(format!("bero-tm-{}-{}.txt", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+    let result_file = std::env::temp_dir().join(format!("pulse-action-{}-{}.txt", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
     let mut all = vec!["--admin-action".to_string(), "--result".to_string(), result_file.display().to_string()];
     all.extend(args.iter().cloned());
     let params = all.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ");
@@ -332,6 +374,7 @@ pub fn run_admin_action(args: &[String]) -> i32 {
                 crate::services::action(&name, action)
             }
             "startup" => crate::startup::set_enabled(&get(2)?, get(1)? == "enable"),
+            "standby" => clear_standby_now(),
             _ => Err(ActionError::Failed("Unknown action.".into())),
         }
     })();
@@ -500,6 +543,13 @@ impl SystemControl for WinControl {
         }
     }
 
+    fn clear_standby(&self, elevate: bool) -> ActionResult {
+        match clear_standby_now() {
+            Err(ActionError::NeedsElevation(_)) if elevate => elevated(&["standby".into()]),
+            r => r,
+        }
+    }
+
     fn autostart(&self) -> bool {
         let Some(k) = RegKey::open(HKEY_CURRENT_USER, util::RUN_KEY, windows::Win32::System::Registry::KEY_READ) else { return false };
         let Some(v) = k.string(util::RUN_VALUE) else { return false };
@@ -620,9 +670,14 @@ mod tests {
         assert_eq!(c.terminate(ProcKey { pid, created: created + 1 }, false), Err(ActionError::Gone));
         let d = c.process_details(ProcKey { pid, created }).unwrap();
         assert!(d.command_line.as_deref().is_some_and(|l| l.contains("127.0.0.1")), "{d:?}");
-        assert_eq!(d.priority, Some(Priority::Normal));
-        c.set_priority(ProcKey { pid, created }, Priority::BelowNormal, false).unwrap();
-        assert_eq!(c.process_details(ProcKey { pid, created }).unwrap().priority, Some(Priority::BelowNormal));
+        // The child inherits this process's class, which isn't Normal when the tests were
+        // started from a launcher that runs below normal. Move it to the other one.
+        let other = match d.priority.expect("priority") {
+            Priority::BelowNormal => Priority::Normal,
+            _ => Priority::BelowNormal,
+        };
+        c.set_priority(ProcKey { pid, created }, other, false).unwrap();
+        assert_eq!(c.process_details(ProcKey { pid, created }).unwrap().priority, Some(other));
         assert_eq!(c.end_task(ProcKey { pid, created }), Ok(EndOutcome::NoWindows));
         c.terminate(ProcKey { pid, created }, false).unwrap();
         let status = child.wait().unwrap();

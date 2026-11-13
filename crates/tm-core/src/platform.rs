@@ -21,6 +21,8 @@ pub struct SampleRequest {
     /// Read every GPU engine each time. Otherwise a backend may read engines that have been idle
     /// for a while less often, and so notice one starting work a few seconds late.
     pub gpu_engines: bool,
+    /// Count the frames the app in front presents.
+    pub fps: bool,
 }
 
 /// Reads counters. Owned by the collector thread.
@@ -31,6 +33,8 @@ pub trait Sampler: Send {
     /// Reads every requested counter. Must not fail as a whole: a counter that can't be read is
     /// left out or `None`.
     fn sample(&mut self, req: &SampleRequest) -> RawSample;
+    /// Sampling is paused: let go of anything that only runs while sampling, such as a frame trace.
+    fn pause(&mut self) {}
 }
 
 /// Raw image data for an icon, RGBA8, not premultiplied.
@@ -284,6 +288,10 @@ pub trait SystemControl: Send + Sync {
 
     fn startup_entries(&self) -> Vec<StartupEntry>;
     fn set_startup_enabled(&self, id: &str, enabled: bool, elevate: bool) -> ActionResult;
+
+    /// Empties the standby list: cached file and program data that is kept in RAM in case it’s
+    /// needed again. Needs administrator rights.
+    fn clear_standby(&self, elevate: bool) -> ActionResult;
 
     fn autostart(&self) -> bool;
     fn set_autostart(&self, on: bool) -> ActionResult;

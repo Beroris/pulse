@@ -13,11 +13,11 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "Beroris"
-      VALUE "FileDescription", "Bero Task Manager"
-      VALUE "ProductName", "Bero Task Manager"
+      VALUE "FileDescription", "Pulse"
+      VALUE "ProductName", "Pulse"
       VALUE "FileVersion", "@VERSION@"
       VALUE "ProductVersion", "@VERSION@"
-      VALUE "OriginalFilename", "bero-task-manager.exe"
+      VALUE "OriginalFilename", "pulse.exe"
       VALUE "LegalCopyright", "GPL-3.0"
     END
   END

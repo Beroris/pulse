@@ -180,6 +180,11 @@ pub enum Metric {
     Gpu,
     Disk,
     Network,
+    /// Frames per second of the app in front.
+    Fps,
+    /// The GPU's dedicated memory in use.
+    #[serde(rename = "gpu_memory")]
+    GpuMemory,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -209,6 +214,18 @@ pub struct WindowPlacement {
     pub width: u32,
     pub height: u32,
     pub maximized: bool,
+}
+
+/// How a simple table (startup apps, services) is sorted and how wide its columns are.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct TableLayout {
+    /// Key of the sort column; empty for the table’s default.
+    pub sort: String,
+    pub desc: bool,
+    /// Widths the user set, in logical pixels, by column key. A column that isn’t here takes its
+    /// default width, or the room left over if it’s the table’s stretching column.
+    pub widths: std::collections::BTreeMap<String, u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -246,6 +263,11 @@ pub struct Settings {
     pub widths: std::collections::BTreeMap<Column, u32>,
     /// Show programs' descriptions ("Google Chrome") rather than file names ("chrome.exe").
     pub friendly_names: bool,
+    /// Process memory always in MB (“2,080.4 MB”) instead of switching to GB past 1 GB.
+    pub memory_in_mb: bool,
+    // Startup and services
+    pub startup_table: TableLayout,
+    pub services_table: TableLayout,
     // Performance
     pub cpu_per_core: bool,
     pub compact: CompactSettings,
@@ -277,6 +299,9 @@ impl Default for Settings {
             columns: vec![Column::Status, Column::Cpu, Column::Memory, Column::Disk, Column::Gpu],
             widths: Default::default(),
             friendly_names: true,
+            memory_in_mb: false,
+            startup_table: TableLayout::default(),
+            services_table: TableLayout::default(),
             cpu_per_core: false,
             compact: CompactSettings::default(),
         }
@@ -318,6 +343,9 @@ impl Settings {
         self.columns.retain(|c| *c != Column::Name && *c != Column::CommandLine);
         dedup(&mut self.columns);
         self.widths.retain(|_, w| (40..=2000).contains(w));
+        for t in [&mut self.startup_table, &mut self.services_table] {
+            t.widths.retain(|_, w| (40..=2000).contains(w));
+        }
         if self.accent != "system" && parse_hex(&self.accent).is_none() {
             self.accent = "system".into();
         }

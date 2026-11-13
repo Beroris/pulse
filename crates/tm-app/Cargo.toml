@@ -3,7 +3,7 @@ name = "tm-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Bero Task Manager's interface (Slint) and controller. Platform-neutral: talks to the OS only through tm-core's traits."
+description = "Pulse's interface (Slint) and controller. Platform-neutral: talks to the OS only through tm-core's traits."
 
 [dependencies]
 tm-core.workspace = true

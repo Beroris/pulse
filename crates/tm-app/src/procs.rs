@@ -15,7 +15,8 @@ use tm_core::{Frame, ProcKey, ProcNow, ProcStatus};
 
 use crate::{CellData, ColumnData, ProcRowData};
 
-pub const NAME_MIN: f32 = 240.0;
+/// Narrowest the Name column can be made.
+pub const NAME_MIN: f32 = 160.0;
 
 pub fn default_width(c: Column) -> f32 {
     match c {
@@ -72,6 +73,12 @@ pub struct CellContext<'a> {
     pub frame: &'a Frame,
     pub mem_total: u64,
     pub icons: &'a HashMap<u32, Image>,
+    /// Memory always in MB rather than GB past 1 GB.
+    pub mem_mb: bool,
+}
+
+fn mem(cx: &CellContext, b: u64) -> String {
+    if cx.mem_mb { format::mem_column_mb(b) } else { format::mem_column(b) }
 }
 
 impl Table {
@@ -95,6 +102,12 @@ impl Table {
         self.rows = if self.hold { table::keep_order(rows, &self.order) } else { rows };
         self.order.clear();
         self.order.extend(self.rows.iter().map(|r| r.id.clone()));
+        // Only what's on screen stays selected: after switching view, searching or closing a group,
+        // End task must not act on rows nobody can see.
+        if !self.selected.is_empty() {
+            let shown: HashSet<&RowId> = self.order.iter().collect();
+            self.selected.retain(|id| shown.contains(id));
+        }
     }
 
     pub fn index_of(&self, id: &RowId) -> Option<usize> {
@@ -145,7 +158,8 @@ impl Table {
         }
         match self.selected.iter().next()? {
             RowId::Proc(k) => self.proc_by_key(*k),
-            RowId::Group(_) => self.selected_procs().into_iter().next(),
+            // An app’s main process: the one that started first. Its helpers come later.
+            RowId::Group(_) => self.selected_procs().into_iter().min_by_key(|p| if p.key.created == 0 { u64::MAX } else { p.key.created }),
             RowId::Section(_) => None,
         }
     }
@@ -340,7 +354,9 @@ impl Table {
 
     pub fn columns(&self, s: &Settings, f: &Frame) -> (ColumnData, Vec<ColumnData>, f32) {
         let sort = |c: Column| if s.sort == c { if s.sort_desc { 2 } else { 1 } } else { 0 };
-        let name = ColumnData { title: "Name".into(), sub: SharedString::new(), width: width(s, Column::Name), right: false, sort: sort(Column::Name) };
+        // Width 0: Name takes the room the other columns leave (until a column is resized).
+        let name_w = s.widths.get(&Column::Name).map_or(0.0, |w| *w as f32);
+        let name = ColumnData { title: "Name".into(), sub: SharedString::new(), width: name_w, right: false, sort: sort(Column::Name) };
         let cols: Vec<ColumnData> = s
             .columns
             .iter()
@@ -428,7 +444,7 @@ fn proc_cell(c: Column, p: &ProcNow, cx: &CellContext) -> CellData {
         Column::Status => cell(status_text(p.status), 0.0),
         Column::User => cell(p.user().unwrap_or(""), 0.0),
         Column::Cpu => cell(p.cpu.map(format::pct_column).unwrap_or_else(|| UNKNOWN.into()), heat_pct(p.cpu)),
-        Column::Memory => cell(format::mem_column(p.private_ws), heat_mem(p.private_ws, cx.mem_total)),
+        Column::Memory => cell(mem(cx, p.private_ws), heat_mem(p.private_ws, cx.mem_total)),
         Column::Disk => cell(p.disk().map(format::rate_column).unwrap_or_else(|| UNKNOWN.into()), heat_rate(p.disk())),
         Column::Gpu => {
             if !cx.frame.process_gpu {
@@ -443,8 +459,8 @@ fn proc_cell(c: Column, p: &ProcNow, cx: &CellContext) -> CellData {
         Column::Priority => cell(Priority::from_base(p.base_priority).map_or("", |p| p.label()), 0.0),
         Column::Threads => cell(format::count(p.threads as u64), 0.0),
         Column::Handles => cell(format::count(p.handles as u64), 0.0),
-        Column::Commit => cell(format::mem_column(p.commit), 0.0),
-        Column::WorkingSet => cell(format::mem_column(p.working_set), 0.0),
+        Column::Commit => cell(mem(cx, p.commit), 0.0),
+        Column::WorkingSet => cell(mem(cx, p.working_set), 0.0),
         Column::CpuTime => cell(format::cpu_time(p.cpu_time), 0.0),
         Column::Description => cell(p.description().unwrap_or(""), 0.0),
         Column::Publisher => cell(meta.and_then(|m| m.company.as_deref()).unwrap_or(""), 0.0),
@@ -457,7 +473,7 @@ fn group_cell(c: Column, first: &ProcNow, a: &Agg, status: ProcStatus, same_user
         Column::Status => cell(status_text(status), 0.0),
         Column::User => cell(if same_user { first.user().unwrap_or("") } else { "" }, 0.0),
         Column::Cpu => cell(a.cpu.map(format::pct_column).unwrap_or_else(|| UNKNOWN.into()), heat_pct(a.cpu)),
-        Column::Memory => cell(format::mem_column(a.private_ws), heat_mem(a.private_ws, cx.mem_total)),
+        Column::Memory => cell(mem(cx, a.private_ws), heat_mem(a.private_ws, cx.mem_total)),
         Column::Disk => cell(a.disk().map(format::rate_column).unwrap_or_else(|| UNKNOWN.into()), heat_rate(a.disk())),
         Column::Gpu => {
             if !cx.frame.process_gpu {
@@ -468,8 +484,8 @@ fn group_cell(c: Column, first: &ProcNow, a: &Agg, status: ProcStatus, same_user
         }
         Column::Threads => cell(format::count(a.threads), 0.0),
         Column::Handles => cell(format::count(a.handles), 0.0),
-        Column::Commit => cell(format::mem_column(a.commit), 0.0),
-        Column::WorkingSet => cell(format::mem_column(a.working_set), 0.0),
+        Column::Commit => cell(mem(cx, a.commit), 0.0),
+        Column::WorkingSet => cell(mem(cx, a.working_set), 0.0),
         Column::CpuTime => cell(format::cpu_time(a.cpu_time), 0.0),
         _ => proc_cell(c, first, cx),
     }
@@ -640,7 +656,7 @@ mod tests {
     fn unknown_values_are_not_zero() {
         let f = Frame::default();
         let icons = HashMap::new();
-        let cx = CellContext { frame: &f, mem_total: 0, icons: &icons };
+        let cx = CellContext { frame: &f, mem_total: 0, icons: &icons, mem_mb: false };
         let mut x = p(1, "x.exe");
         x.cpu = None;
         assert_eq!(proc_cell(Column::Cpu, &x, &cx).text, UNKNOWN);

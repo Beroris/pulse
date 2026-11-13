@@ -1,70 +1,8 @@
-import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { App } from "state.slint";
 import { ProcRowData, ColumnData, StatData } from "types.slint";
 import { Icon, IconButton, Button, SearchBox, Segmented, Card, Badge, FocusRing, Divider } from "widgets.slint";
-
-component HeaderCell inherits Rectangle {
-    in property <ColumnData> column;
-    in property <bool> first;
-    callback clicked;
-    callback resized(length);
-    height: 44px;
-    background: ta.has-hover ? Theme.hover : transparent;
-    accessible-role: button;
-    accessible-label: column.title;
-    property <length> start-width;
-    VerticalLayout {
-        padding-left: root.first ? 12px : 10px;
-        padding-right: 10px;
-        alignment: center;
-        spacing: -2px;
-        HorizontalLayout {
-            alignment: root.column.right ? end : start;
-            spacing: 4px;
-            Text {
-                text: root.column.title;
-                color: root.column.sort != 0 ? Theme.text : Theme.secondary;
-                font-size: Theme.small;
-                font-weight: root.column.sort != 0 ? 600 : 500;
-                overflow: elide;
-            }
-            if root.column.sort != 0: Icon {
-                d: root.column.sort == 2 ? Icons.chevron-down : Icons.chevron-up;
-                size: 11px;
-                weight: 2px;
-                color: Theme.accent;
-                y: (parent.height - self.height) / 2;
-            }
-        }
-        if root.column.sub != "": Text {
-            text: root.column.sub;
-            color: Theme.text;
-            font-size: Theme.small;
-            font-weight: 600;
-            horizontal-alignment: root.column.right ? right : left;
-        }
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-    // Drag the right edge to resize.
-    Rectangle {
-        x: parent.width - 6px;
-        width: 6px;
-        Rectangle { x: 5px; width: 1px; height: 16px; background: Theme.divider; }
-        rta := TouchArea {
-            mouse-cursor: col-resize;
-            pointer-event(e) => {
-                if e.kind == PointerEventKind.down { root.start-width = root.width; }
-            }
-            moved => {
-                if self.pressed { root.resized(max(48px, root.start-width + self.mouse-x - self.pressed-x)); }
-            }
-        }
-    }
-}
+import { ListView, ScrollView, HeaderCell } from "table.slint";
 
 component ProcRow inherits Rectangle {
     in property <ProcRowData> data;
@@ -76,6 +14,15 @@ component ProcRow inherits Rectangle {
     callback activated;
     callback toggle;
     height: App.table-row-height;
+    // The arrow turns from pointing right (closed) to pointing down (open). The software renderer
+    // can’t rotate items, so the path itself is turned.
+    property <float> turn: data.expanded ? 1 : 0;
+    animate turn { duration: Theme.calm; easing: ease-out; }
+    property <float> tc: cos(turn * 90deg);
+    property <float> ts: sin(turn * 90deg);
+    property <string> chevron: "M" + (12 - 2.5 * tc + 5.5 * ts) + " " + (12 - 2.5 * ts - 5.5 * tc)
+        + "L" + (12 + 3 * tc) + " " + (12 + 3 * ts)
+        + "L" + (12 - 2.5 * tc - 5.5 * ts) + " " + (12 - 2.5 * ts + 5.5 * tc);
     accessible-role: list-item;
     accessible-label: data.name;
     accessible-item-selected: data.selected;
@@ -91,19 +38,8 @@ component ProcRow inherits Rectangle {
             padding-left: 8px + root.data.depth * 20px;
             padding-right: 8px;
             spacing: 6px;
-            Rectangle {
-                width: 18px;
-                if root.data.expandable: Icon {
-                    d: root.data.expanded ? Icons.chevron-down : Icons.chevron-right;
-                    size: 13px;
-                    weight: 2px;
-                    color: cta.has-hover ? Theme.text : Theme.tertiary;
-                }
-                cta := TouchArea {
-                    enabled: root.data.expandable;
-                    clicked => { root.toggle(); }
-                }
-            }
+            // Room for the expand arrow, which is drawn on top of the row (see the end).
+            Rectangle { width: 18px; }
             if root.data.kind == 0: Text {
                 text: root.data.name;
                 color: Theme.accent;
@@ -179,6 +115,22 @@ component ProcRow inherits Rectangle {
         }
         double-clicked => { root.activated(); }
     }
+    // The expand arrow sits above the row’s touch area, so one click on it opens or closes the row.
+    if root.data.expandable: Rectangle {
+        x: 4px + root.data.depth * 20px;
+        width: 26px;
+        height: parent.height;
+        Icon {
+            d: root.chevron;
+            size: 13px;
+            weight: 2px;
+            color: cta.has-hover ? Theme.text : Theme.tertiary;
+        }
+        cta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.toggle(); }
+        }
+    }
 }
 
 component DetailsPanel inherits Card {
@@ -225,7 +177,9 @@ component DetailsPanel inherits Card {
 
 export component ProcessesPage inherits Rectangle {
     property <length> row-h: App.table-row-height;
-    property <length> name-w: max(App.name-column.width, table.width - App.columns-width - 14px);
+    // Name takes the room the other columns leave until a column is resized; from then on it keeps
+    // its own width, so dragging one edge never moves another.
+    property <length> name-w: App.name-column.width > 0 ? App.name-column.width : max(240px, table.width - App.columns-width - 6px);
     property <length> content-w: name-w + App.columns-width;
     property <bool> keyed;
     public function focus-search() { search.focus-input(); }
@@ -237,15 +191,20 @@ export component ProcessesPage inherits Rectangle {
         spacing: 14px;
         HorizontalLayout {
             spacing: 12px;
+            // Text that changes every second elides rather than widening the page: a page wider
+            // than the window makes the window grow.
             VerticalLayout {
                 alignment: center;
                 spacing: -2px;
-                Text { text: "Processes"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
-                Text { text: App.process-summary; color: Theme.tertiary; font-size: Theme.small; }
+                min-width: 110px;
+                horizontal-stretch: 1;
+                Text { text: "Processes"; color: Theme.text; font-size: Theme.title; font-weight: 600; overflow: elide; }
+                Text { text: App.process-summary; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
             }
-            Rectangle { horizontal-stretch: 1; }
             search := SearchBox {
-                width: 300px;
+                min-width: 150px;
+                preferred-width: 300px;
+                horizontal-stretch: 0;
                 y: (parent.height - self.height) / 2;
                 placeholder: "Search name, PID, publisher, path…";
                 text <=> App.search;
@@ -262,6 +221,8 @@ export component ProcessesPage inherits Rectangle {
             Button {
                 y: (parent.height - self.height) / 2;
                 text: App.selection-count > 1 ? "End " + App.selection-count + " tasks" : "End task";
+                // The label grows with the count; it mustn’t push the window wider.
+                min-width: 104px;
                 icon: Icons.end;
                 enabled: App.selection-can-end;
                 clicked => { App.end-selected(); }
@@ -316,6 +277,13 @@ export component ProcessesPage inherits Rectangle {
                             activated => { App.column-toggled(i); }
                         }
                     }
+                    MenuItem { title: "Reset column widths"; activated => { App.columns-reset(); } }
+                    MenuItem {
+                        title: "Show memory in MB";
+                        checkable: true;
+                        checked: App.memory-in-mb;
+                        activated => { App.memory-in-mb = !App.memory-in-mb; App.setting-bool("memory-in-mb", App.memory-in-mb); }
+                    }
                     MenuItem {
                         title: "Show descriptions instead of file names";
                         checkable: true;
@@ -354,15 +322,17 @@ export component ProcessesPage inherits Rectangle {
                             alignment: start;
                             HeaderCell {
                                 width: root.name-w;
-                                first: true;
+                                pad-left: 12px;
                                 column: App.name-column;
                                 clicked => { App.sort-by(0); }
+                                resize-started => { App.column-resize-started(root.name-w); }
                                 resized(w) => { App.column-resized(0, w); }
                             }
                             for c[i] in App.columns: HeaderCell {
                                 width: c.width;
                                 column: c;
                                 clicked => { App.sort-by(i + 1); }
+                                resize-started => { App.column-resize-started(root.name-w); }
                                 resized(w) => { App.column-resized(i + 1, w); }
                             }
                         }

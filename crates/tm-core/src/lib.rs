@@ -1,4 +1,4 @@
-//! Platform-neutral core of Bero Task Manager.
+//! Platform-neutral core of Pulse.
 //!
 //! Nothing in this crate calls the operating system. A platform backend implements the traits in
 //! [`platform`] and hands raw, cumulative counters to the [`engine`], which turns them into rates,

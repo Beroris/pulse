@@ -1,0 +1,201 @@
+// Scrolling and table pieces drawn to the suite's look: a thin scroll bar that floats over the
+// content and widens under the pointer, and the sortable, resizable column header every table uses.
+
+import { Theme, Icons } from "theme.slint";
+import { ColumnData } from "types.slint";
+import { Icon } from "widgets.slint";
+
+component ScrollBar inherits Rectangle {
+    in property <bool> horizontal;
+    // How far the content can move (content size minus the visible size). Nothing to scroll at 0.
+    in property <length> maximum;
+    in property <length> page-size;
+    // The Flickable's content-x or content-y: 0 at the start, -maximum at the end.
+    in-out property <length> value;
+    callback scrolled();
+
+    property <bool> active: ta.has-hover || ta.pressed;
+    property <length> track: (horizontal ? self.width : self.height) - 4px;
+    property <length> thumb-len: max(32px, track * page-size / max(1px, maximum + page-size));
+    property <length> thumb-pos: 2px + (track - thumb-len) * clamp(-value / max(1px, maximum), 0, 1);
+    property <length> thick: active ? 7px : 4px;
+    animate thick { duration: Theme.quick; easing: ease-out; }
+
+    visible: maximum > 0.5px;
+    background: active ? Theme.text.with-alpha(0.04) : transparent;
+    border-radius: 6px;
+    animate background { duration: Theme.quick; }
+
+    Rectangle {
+        x: root.horizontal ? root.thumb-pos : parent.width - root.thick - 2px;
+        y: root.horizontal ? parent.height - root.thick - 2px : root.thumb-pos;
+        width: root.horizontal ? root.thumb-len : root.thick;
+        height: root.horizontal ? root.thick : root.thumb-len;
+        border-radius: root.thick / 2;
+        background: Theme.text.with-alpha(ta.pressed ? 0.45 : root.active ? 0.34 : 0.2);
+        animate background { duration: Theme.quick; }
+    }
+
+    ta := TouchArea {
+        property <length> start-value;
+        property <length> start-pos;
+        function at() -> length { return root.horizontal ? self.mouse-x : self.mouse-y; }
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                // A click on the track, not the thumb, moves a page toward the pointer.
+                if self.at() < root.thumb-pos {
+                    root.value = min(0px, root.value + root.page-size);
+                    root.scrolled();
+                } else if self.at() > root.thumb-pos + root.thumb-len {
+                    root.value = max(-root.maximum, root.value - root.page-size);
+                    root.scrolled();
+                }
+                self.start-value = -root.value;
+                self.start-pos = self.at();
+            }
+        }
+        moved => {
+            if self.pressed && root.maximum > 0 {
+                root.value = -clamp(self.start-value + (self.at() - self.start-pos) * root.maximum / max(1px, root.track - root.thumb-len), 0px, root.maximum);
+                root.scrolled();
+            }
+        }
+        scroll-event(e) => {
+            if root.horizontal && e.delta-x != 0 {
+                root.value = clamp(root.value + e.delta-x, -root.maximum, 0px);
+                return accept;
+            }
+            if !root.horizontal && e.delta-y != 0 {
+                root.value = clamp(root.value + e.delta-y, -root.maximum, 0px);
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+// Same properties as the standard ScrollView, so it can stand in for it.
+export component ScrollView inherits Rectangle {
+    out property <length> visible-width <=> flick.width;
+    out property <length> visible-height <=> flick.height;
+    in-out property <length> content-width <=> flick.content-width;
+    in-out property <length> content-height <=> flick.content-height;
+    in-out property <length> content-x <=> flick.content-x;
+    in-out property <length> content-y <=> flick.content-y;
+    callback scrolled <=> flick.flicked;
+    min-width: 50px;
+    min-height: 50px;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    preferred-width: 100%;
+    preferred-height: 100%;
+
+    flick := Flickable {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        @children
+    }
+    vbar := ScrollBar {
+        horizontal: false;
+        x: parent.width - self.width;
+        y: 0;
+        width: 12px;
+        height: hbar.visible ? parent.height - 12px : parent.height;
+        maximum: flick.content-height - flick.height;
+        page-size: flick.height;
+        value <=> flick.content-y;
+        scrolled => { flick.flicked(); }
+    }
+    hbar := ScrollBar {
+        horizontal: true;
+        x: 0;
+        y: parent.height - self.height;
+        width: vbar.visible ? parent.width - 12px : parent.width;
+        height: 12px;
+        maximum: flick.content-width - flick.width;
+        page-size: flick.width;
+        value <=> flick.content-x;
+        scrolled => { flick.flicked(); }
+    }
+}
+
+// The name matters: Slint only creates the rows in view for a `for` inside a component called
+// ListView.
+export component ListView inherits ScrollView {
+    accessible-role: list;
+    @children
+}
+
+// A column title. Click to sort; drag the right edge to resize.
+export component HeaderCell inherits Rectangle {
+    in property <ColumnData> column;
+    in property <length> pad-left: 10px;
+    in property <bool> resizable: true;
+    in property <bool> sortable: true;
+    // Height of the header row.
+    in property <length> row-height: 44px;
+    callback clicked;
+    // The edge was grabbed; the table may need to fix other widths before this one changes.
+    callback resize-started;
+    callback resized(length);
+    height: row-height;
+    background: ta.has-hover && root.sortable ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: column.title;
+    VerticalLayout {
+        padding-left: root.pad-left;
+        padding-right: 10px;
+        alignment: center;
+        spacing: -2px;
+        HorizontalLayout {
+            alignment: root.column.right ? end : start;
+            spacing: 4px;
+            Text {
+                text: root.column.title;
+                color: root.column.sort != 0 ? Theme.text : Theme.secondary;
+                font-size: Theme.small;
+                font-weight: root.column.sort != 0 ? 600 : 500;
+                overflow: elide;
+            }
+            if root.column.sort != 0: Icon {
+                d: root.column.sort == 2 ? Icons.chevron-down : Icons.chevron-up;
+                size: 11px;
+                weight: 2px;
+                color: Theme.accent;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        if root.column.sub != "": Text {
+            text: root.column.sub;
+            color: Theme.text;
+            font-size: Theme.small;
+            font-weight: 600;
+            horizontal-alignment: root.column.right ? right : left;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.sortable;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    if root.resizable: Rectangle {
+        // Inside the cell: the next cell is drawn on top and would take the pointer.
+        x: parent.width - 9px;
+        width: 9px;
+        Rectangle { x: 8px; width: 1px; height: 16px; background: rta.has-hover || rta.pressed ? Theme.accent : Theme.divider; }
+        rta := TouchArea {
+            mouse-cursor: col-resize;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left { root.resize-started(); }
+            }
+            // The handle moves with the edge, so the pointer's offset from where it was pressed is
+            // how far the edge still has to go.
+            moved => {
+                if self.pressed { root.resized(max(48px, root.width + self.mouse-x - self.pressed-x)); }
+            }
+        }
+    }
+}

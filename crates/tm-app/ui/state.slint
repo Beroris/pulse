@@ -31,6 +31,7 @@ export global App {
     in property <string> process-summary;
     in-out property <int> view-mode;
     in-out property <bool> friendly-names: true;
+    in-out property <bool> memory-in-mb;
     in property <[string]> column-choices;
     in property <[bool]> column-on;
     in property <int> selection-count;
@@ -48,6 +49,9 @@ export global App {
     callback sort-by(int);
     callback column-toggled(int);
     callback column-resized(int, length);
+    // A column edge was grabbed; the argument is Name’s width on screen right now.
+    callback column-resize-started(length);
+    callback columns-reset();
     callback row-pressed(int, bool, bool);
     callback row-context(int);
     callback row-activated(int);
@@ -88,11 +92,26 @@ export global App {
     in property <[StatData]> perf-static;
     in property <[Segment]> perf-segments;
     in property <string> perf-note;
+    in property <bool> perf-is-memory;
+    callback clear-standby();
     callback device-selected(int);
     callback toggle-per-core();
 
     // ─── Startup ───
     in property <[StartupRow]> startup-rows;
+    // Width 0 marks the column that takes the leftover room.
+    in property <[ColumnData]> startup-columns;
+    // Sum of the widths of the other columns.
+    in property <length> startup-fixed-width;
+    // 0 all, 1 enabled, 2 disabled
+    in-out property <int> startup-filter;
+    // 0 anywhere, 1 registry, 2 startup folders, 3 Store apps
+    in-out property <int> startup-location;
+    callback startup-filter-changed();
+    callback startup-sort(int);
+    callback startup-resize-started(length);
+    callback startup-resized(int, length);
+    callback startup-columns-reset();
     in property <string> startup-summary;
     in property <bool> startup-loading;
     in-out property <string> startup-search;
@@ -115,6 +134,15 @@ export global App {
 
     // ─── Services ───
     in property <[ServiceRow]> service-rows;
+    in property <[ColumnData]> service-columns;
+    in property <length> service-fixed-width;
+    // 0 any, 1 automatic, 2 manual, 3 disabled
+    in-out property <int> services-start-filter;
+    callback services-start-filter-changed(int);
+    callback service-sort(int);
+    callback service-resize-started(length);
+    callback service-resized(int, length);
+    callback service-columns-reset();
     in property <string> services-summary;
     in property <bool> services-loading;
     in-out property <string> services-search;

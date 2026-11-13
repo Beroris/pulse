@@ -347,7 +347,7 @@ mod tests {
     fn disables_and_restores_a_user_entry() {
         // A throwaway value in this user's Run key, removed again at the end.
         let run = RegKey::create(HKEY_CURRENT_USER, RUN).unwrap();
-        let name = "BeroTaskManagerTestEntry";
+        let name = "PulseTestEntry";
         assert!(run.set_string(name, r#""C:\Windows\System32\cmd.exe" /c exit"#));
         let find = || entries().into_iter().find(|e| e.name == name);
         let e = find().expect("listed");

@@ -1,4 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView } from "table.slint";
 import { Theme, Icons } from "theme.slint";
 import { App } from "state.slint";
 import { DeviceData, PerfGraph, StatData, Segment } from "types.slint";
@@ -162,7 +162,18 @@ export component PerformancePage inherits Rectangle {
                     // Memory composition.
                     if App.perf-segments.length > 0: VerticalLayout {
                         spacing: 6px;
-                        Text { text: "Memory composition"; color: Theme.secondary; font-size: Theme.small; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: "Memory composition"; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            if App.perf-is-memory: Button {
+                                horizontal-stretch: 0;
+                                text: "Clear standby";
+                                icon: App.elevated ? "" : Icons.shield;
+                                kind: 3;
+                                tip: "Empties the standby list. Needs administrator rights.";
+                                clicked => { App.clear-standby(); }
+                            }
+                        }
                         HorizontalLayout {
                             height: 26px;
                             spacing: 2px;
@@ -186,7 +197,7 @@ export component PerformancePage inherits Rectangle {
                                     border-radius: 3px;
                                     background: s.tone == 0 ? Theme.accent : s.tone == 1 ? Theme.accent.with-alpha(0.55) : s.tone == 2 ? Theme.accent.with-alpha(0.25) : Theme.divider;
                                 }
-                                Text { text: s.label + " " + s.value; color: Theme.secondary; font-size: Theme.tiny; }
+                                Text { text: s.label + " " + s.value; color: Theme.secondary; font-size: Theme.tiny; overflow: elide; }
                             }
                             Rectangle { horizontal-stretch: 1; }
                         }

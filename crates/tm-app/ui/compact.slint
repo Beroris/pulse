@@ -10,7 +10,7 @@ export component CompactWindow inherits Window {
     callback open-main();
     callback dismiss();
     callback drag();
-    title: "Bero Task Manager monitor";
+    title: "Pulse monitor";
     icon: @image-url("../../../assets/icon.png");
     no-frame: true;
     always-on-top: true;
@@ -79,10 +79,10 @@ export component Tray inherits SystemTrayIcon {
     callback toggle-click-through();
     callback quit();
     icon: @image-url("../../../assets/icon.png");
-    tooltip: "Bero Task Manager";
+    tooltip: "Pulse";
     clicked => { root.show-main(); }
     Menu {
-        MenuItem { title: "Open Bero Task Manager"; activated => { root.show-main(); } }
+        MenuItem { title: "Open Pulse"; activated => { root.show-main(); } }
         MenuSeparator { }
         MenuItem { title: "Compact monitor"; checkable: true; checked: root.compact-open; activated => { root.toggle-compact(); } }
         MenuItem { title: "Monitor ignores clicks"; checkable: true; checked: root.click-through; enabled: root.compact-open; activated => { root.toggle-click-through(); } }

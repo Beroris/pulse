@@ -1,48 +1,66 @@
-import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { App } from "state.slint";
-import { StartupRow } from "types.slint";
-import { Icon, IconButton, Button, SearchBox, Card, Badge, Toggle, Divider } from "widgets.slint";
+import { StartupRow, ColumnData } from "types.slint";
+import { Icon, IconButton, Button, SearchBox, Segmented, Select, Card, Badge, Toggle, Divider } from "widgets.slint";
+import { ListView, ScrollView, HeaderCell } from "table.slint";
 
+// Columns, in the order the controller sends them: name, publisher, location, status.
 component StartupItem inherits Rectangle {
     in property <StartupRow> data;
     in property <int> index;
-    height: 52px;
-    border-radius: Theme.radius-small;
+    in property <[ColumnData]> cols;
+    in property <length> fill-w;
+    property <length> w0: cols[0].width > 0 ? cols[0].width : fill-w;
+    height: 40px;
     background: data.selected ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: data.name + (data.enabled ? ", enabled" : ", disabled");
     accessible-item-selected: data.selected;
     ta := TouchArea { clicked => { App.startup-select(root.index); } }
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 12px;
+        alignment: start;
+        HorizontalLayout {
+            width: root.w0;
+            padding-left: 12px;
+            padding-right: 10px;
+            spacing: 10px;
+            Rectangle {
+                width: 20px;
+                if root.data.has-icon: Image { source: root.data.icon; width: 20px; height: 20px; image-rendering: smooth; }
+                if !root.data.has-icon: Rectangle { width: 20px; height: 20px; border-radius: 6px; background: Theme.raised; Icon { d: Icons.startup; size: 12px; color: Theme.tertiary; } }
+            }
+            Text { text: root.data.name; color: root.data.enabled ? Theme.text : Theme.secondary; font-size: Theme.body; font-weight: 500; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            if root.data.missing: Badge { text: "File missing"; kind: 2; y: (parent.height - self.height) / 2; }
+        }
         Rectangle {
-            width: 24px;
-            if root.data.has-icon: Image { source: root.data.icon; width: 24px; height: 24px; image-rendering: smooth; }
-            if !root.data.has-icon: Rectangle { width: 22px; height: 22px; border-radius: 6px; background: Theme.raised; Icon { d: Icons.startup; size: 14px; color: Theme.tertiary; } }
+            width: root.cols[1].width;
+            Text { x: 10px; width: parent.width - 20px; text: root.data.publisher != "" ? root.data.publisher : "Unknown"; color: root.data.publisher != "" ? Theme.secondary : Theme.tertiary; font-size: Theme.small; vertical-alignment: center; overflow: elide; }
         }
-        VerticalLayout {
-            alignment: center;
-            spacing: -2px;
-            horizontal-stretch: 1;
-            Text { text: root.data.name; color: root.data.enabled ? Theme.text : Theme.secondary; font-size: Theme.body; font-weight: 500; overflow: elide; }
-            Text { text: root.data.publisher != "" ? root.data.publisher : "Unknown publisher"; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
+        Rectangle {
+            width: root.cols[2].width;
+            Text { x: 10px; width: parent.width - 20px; text: root.data.source; color: Theme.secondary; font-size: Theme.small; vertical-alignment: center; overflow: elide; }
         }
-        if root.data.missing: Badge { text: "File missing"; kind: 2; y: (parent.height - self.height) / 2; }
-        if root.data.needs-admin: Icon { d: Icons.shield; size: 14px; color: Theme.tertiary; y: (parent.height - self.height) / 2; }
-        Text { text: root.data.source; color: Theme.tertiary; font-size: Theme.small; vertical-alignment: center; width: 150px; overflow: elide; }
-        Toggle {
-            y: (parent.height - self.height) / 2;
-            checked: root.data.enabled;
-            label: root.data.name;
-            toggled(on) => { App.startup-toggle(root.index, on); }
+        HorizontalLayout {
+            width: root.cols[3].width;
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 8px;
+            Toggle {
+                y: (parent.height - self.height) / 2;
+                checked: root.data.enabled;
+                label: root.data.name;
+                toggled(on) => { App.startup-toggle(root.index, on); }
+            }
+            Text { text: root.data.enabled ? "Enabled" : "Disabled"; color: root.data.enabled ? Theme.text : Theme.secondary; font-size: Theme.small; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            if root.data.needs-admin: Icon { d: Icons.shield; size: 13px; color: Theme.tertiary; y: (parent.height - self.height) / 2; }
         }
     }
 }
 
 export component StartupPage inherits Rectangle {
+    property <length> fixed: App.startup-fixed-width;
+    property <length> fill-w: max(180px, lv.visible-width - fixed - 6px);
+    property <length> content-w: (App.startup-columns[0].width > 0 ? App.startup-columns[0].width : fill-w) + fixed;
     VerticalLayout {
         padding: 28px;
         padding-top: 24px;
@@ -53,16 +71,34 @@ export component StartupPage inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 spacing: -2px;
-                Text { text: "Startup"; color: Theme.text; font-size: Theme.title; font-weight: 600; }
-                Text { text: App.startup-summary; color: Theme.tertiary; font-size: Theme.small; }
+                min-width: 90px;
+                horizontal-stretch: 1;
+                Text { text: "Startup"; color: Theme.text; font-size: Theme.title; font-weight: 600; overflow: elide; }
+                Text { text: App.startup-summary; color: Theme.tertiary; font-size: Theme.small; overflow: elide; }
             }
-            Rectangle { horizontal-stretch: 1; }
             SearchBox {
-                width: 260px;
+                min-width: 140px;
+                preferred-width: 240px;
+                horizontal-stretch: 0;
                 y: (parent.height - self.height) / 2;
                 placeholder: "Search startup apps";
                 text <=> App.startup-search;
                 edited(t) => { App.startup-search-edited(t); }
+            }
+            Segmented {
+                y: (parent.height - self.height) / 2;
+                label: "Show";
+                options: ["All", "Enabled", "Disabled"];
+                selected <=> App.startup-filter;
+                changed(i) => { App.startup-filter-changed(); }
+            }
+            Select {
+                y: (parent.height - self.height) / 2;
+                width: 150px;
+                label: "Where it’s registered";
+                options: ["Anywhere", "Registry", "Startup folders", "Store apps"];
+                selected <=> App.startup-location;
+                changed(i) => { App.startup-filter-changed(); }
             }
             IconButton { icon: Icons.restart; tip: "Refresh"; y: (parent.height - self.height) / 2; clicked => { App.startup-refresh(); } }
         }
@@ -70,14 +106,43 @@ export component StartupPage inherits Rectangle {
             spacing: 12px;
             Card {
                 horizontal-stretch: 1;
-                VerticalLayout {
-                    padding: 6px;
-                    ListView {
-                        for r[i] in App.startup-rows: StartupItem { data: r; index: i; }
+                clip: true;
+                // Right-click the header to put the columns back.
+                ContextMenuArea {
+                    y: 0;
+                    height: 40px;
+                    Menu {
+                        MenuItem { title: "Reset column widths"; activated => { App.startup-columns-reset(); } }
+                    }
+                    Rectangle {
+                        y: 0;
+                        height: 40px;
+                        clip: true;
+                        HorizontalLayout {
+                            x: lv.content-x;
+                            width: root.content-w;
+                            alignment: start;
+                            for c[i] in App.startup-columns: HeaderCell {
+                                width: c.width > 0 ? c.width : root.fill-w;
+                                row-height: 40px;
+                                pad-left: i == 0 ? 12px : 10px;
+                                column: c;
+                                clicked => { App.startup-sort(i); }
+                                resize-started => { App.startup-resize-started(root.fill-w); }
+                                resized(w) => { App.startup-resized(i, w); }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.divider; }
                     }
                 }
-                if App.startup-loading: Text { y: 60px; width: parent.width; horizontal-alignment: center; text: "Reading startup entries…"; color: Theme.tertiary; }
-                if !App.startup-loading && App.startup-rows.length == 0: Text { y: 60px; width: parent.width; horizontal-alignment: center; text: App.startup-search == "" ? "Nothing starts with Windows from the places this app checks." : "Nothing matches."; color: Theme.tertiary; }
+                lv := ListView {
+                    y: 40px;
+                    height: parent.height - 40px;
+                    content-width: max(self.visible-width, root.content-w);
+                    for r[i] in App.startup-rows: StartupItem { data: r; index: i; cols: App.startup-columns; fill-w: root.fill-w; }
+                }
+                if App.startup-loading: Text { y: 80px; width: parent.width; horizontal-alignment: center; text: "Reading startup entries…"; color: Theme.tertiary; }
+                if !App.startup-loading && App.startup-rows.length == 0: Text { y: 80px; width: parent.width; horizontal-alignment: center; text: App.startup-search == "" && App.startup-filter == 0 && App.startup-location == 0 ? "Nothing starts with Windows from the places this app checks." : "Nothing matches."; color: Theme.tertiary; }
             }
             if App.startup-selected >= 0: Card {
                 width: 340px;

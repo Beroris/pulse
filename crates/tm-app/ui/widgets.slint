@@ -486,7 +486,8 @@ export component Meter inherits Rectangle {
         height: parent.height;
         border-radius: 3px;
         background: root.ink;
-        animate width { duration: Theme.calm; }
+        // No glide to the new value: readings change every refresh, so it would redraw for a
+        // fifth of every second. That was about half the Overview's drawing cost.
     }
 }
 

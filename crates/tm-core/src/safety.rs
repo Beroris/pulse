@@ -60,7 +60,7 @@ pub fn assess_windows(pid: u32, name: &str, in_system_dir: bool, critical_flag: 
         return Protection::Refused("This is a core Windows process. Ending it would stop Windows or sign you out.".into());
     }
     if is_self {
-        return Protection::Refused("This is Bero Task Manager itself. Quit it from the tray icon or with Ctrl+Q.".into());
+        return Protection::Refused("This is Pulse itself. Quit it from the tray icon or with Ctrl+Q.".into());
     }
     if in_system_dir {
         if let Some((_, why)) = CAUTION.iter().find(|(n, _)| *n == lower) {
@@ -116,6 +116,6 @@ mod tests {
 
     #[test]
     fn self_is_refused() {
-        assert!(assess_windows(9000, "bero-task-manager.exe", false, None, true).is_refused());
+        assert!(assess_windows(9000, "pulse.exe", false, None, true).is_refused());
     }
 }

@@ -1,4 +1,4 @@
-//! Bero Task Manager's interface (Slint) and the controller behind it.
+//! Pulse's interface (Slint) and the controller behind it.
 //!
 //! Nothing here calls the operating system directly. Monitoring goes through tm-core's
 //! [`Sampler`] and [`MetaResolver`], actions through [`SystemControl`], and the few window
@@ -38,6 +38,9 @@ pub trait Shell {
     fn set_menu_theme(&self, dark: bool);
     /// Whether a rectangle in physical pixels is on a connected display.
     fn on_screen(&self, x: i32, y: i32, width: u32, height: u32) -> bool;
+    /// Hands memory the app isn't using back to the system. Called once each time the last
+    /// window closes, never on a timer.
+    fn release_memory(&self) {}
 }
 
 pub struct Platform {

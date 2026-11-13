@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="Beroris.BeroTaskManager" version="1.0.0.0" processorArchitecture="*"/>
-  <description>Bero Task Manager</description>
+  <assemblyIdentity type="win32" name="Beroris.Pulse" version="1.0.0.0" processorArchitecture="*"/>
+  <description>Pulse</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security><requestedPrivileges>
       <!-- Runs with the user's own rights. Actions that need more ask for them one at a time. -->
@@ -18,6 +18,7 @@
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
     </windowsSettings>
   </application>
   <dependency>

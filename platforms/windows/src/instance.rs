@@ -14,7 +14,7 @@ use windows::core::PCWSTR;
 use crate::util::{IPC_CLASS, MUTEX_NAME, wide};
 
 /// Marks a WM_COPYDATA payload as one of ours.
-const MAGIC: usize = 0x4254_4d31; // "BTM1"
+const MAGIC: usize = 0x504c_5331; // "PLS1"
 
 /// Held for the life of the process; Windows releases it when the process ends.
 pub struct Instance(#[allow(dead_code)] HANDLE);
@@ -72,6 +72,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         if data.dwData == MAGIC && !data.lpData.is_null() && data.cbData <= 4096 {
             let bytes = unsafe { std::slice::from_raw_parts(data.lpData as *const u8, data.cbData as usize) };
             let command = String::from_utf8_lossy(bytes).into_owned();
+            if command == "quit" {
+                // Asked to quit (by the installer, or a launcher): if the app hasn't closed itself
+                // in a few seconds, end it anyway. Settings are saved as they change, so nothing
+                // is lost, and an install never waits on a copy that has stopped responding.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    crate::end_now(0);
+                });
+            }
             tm_app::external_command(command);
             return LRESULT(1);
         }

@@ -64,6 +64,20 @@ struct Addresses {
     dns_suffix: Option<String>,
 }
 
+impl Addresses {
+    /// Has an address other than a self-assigned or link-local one, so traffic can reach it.
+    fn reachable(&self) -> bool {
+        self.ipv4.iter().any(|a| !a.starts_with("169.254.")) || self.ipv6.iter().any(|a| !a.to_ascii_lowercase().starts_with("fe80:"))
+    }
+}
+
+/// A virtual adapter is worth showing when it has an address: VPNs, Hyper-V and WSL switches. The
+/// ones without (WAN Miniports for IP, IPv6 and Network Monitor) are Windows plumbing that is
+/// “up” but never carries traffic of its own.
+fn worth_showing(row: &MIB_IF_ROW2, a: Option<&Addresses>) -> bool {
+    row.InterfaceAndOperStatusFlags._bitfield & FLAG_HARDWARE != 0 || a.is_some_and(Addresses::reachable)
+}
+
 fn addresses() -> Vec<Addresses> {
     let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
     let mut size = 16 * 1024u32;
@@ -125,10 +139,13 @@ impl Nets {
         self.known.clear();
         for row in rows.iter().filter(|r| shown(r)) {
             let luid = unsafe { row.InterfaceLuid.Value };
+            let a = addrs.iter().find(|a| a.luid == luid);
+            if !worth_showing(row, a) {
+                continue;
+            }
             let mac = (row.PhysicalAddressLength == 6).then(|| {
                 row.PhysicalAddress[..6].iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-")
             });
-            let a = addrs.iter().find(|a| a.luid == luid);
             self.known.push((luid, row.InterfaceIndex));
             out.push(NetInfo {
                 id: luid,
@@ -175,5 +192,15 @@ mod tests {
         for i in &info {
             assert!(!i.name.is_empty());
         }
+    }
+
+    #[test]
+    fn plumbing_without_addresses_is_left_out() {
+        let none = Addresses { luid: 1, ipv4: vec![], ipv6: vec![], dns_suffix: None };
+        let link_local = Addresses { luid: 1, ipv4: vec!["169.254.3.4".into()], ipv6: vec!["fe80::1".into()], dns_suffix: None };
+        let vpn = Addresses { luid: 1, ipv4: vec!["100.64.0.7".into()], ipv6: vec![], dns_suffix: None };
+        assert!(!none.reachable());
+        assert!(!link_local.reachable());
+        assert!(vpn.reachable());
     }
 }

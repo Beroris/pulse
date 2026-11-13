@@ -122,6 +122,11 @@ impl Snapshot {
         Snapshot { buf: Vec::new(), try_full: crate::util::is_elevated(), names: Interner::default(), users: HashMap::new(), name_buf: String::new() }
     }
 
+    /// Frees the buffer the process list is read into, while no list is wanted.
+    pub fn release_buffer(&mut self) {
+        self.buf = Vec::new();
+    }
+
     fn query(&mut self, class: i32) -> bool {
         if self.buf.is_empty() {
             self.buf = vec![0u64; 512 * 1024 / 8];
@@ -422,10 +427,18 @@ mod tests {
 
     #[test]
     fn lists_processes_and_services() {
+        // CPU time is charged a clock tick at a time, so a test run that has barely started
+        // can still read zero. Spin for a few ticks first.
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(100) {
+            std::hint::spin_loop();
+        }
         let mut s = Snapshot::new();
         let (list, _) = s.sample().expect("process list");
         let me = list.iter().find(|p| p.pid == std::process::id()).expect("self");
-        assert!(me.threads > 0 && me.private_ws > 0 && me.cpu_time > 0);
+        assert!(me.threads > 0, "{me:?}");
+        assert!(me.private_ws > 0, "{me:?}");
+        assert!(me.cpu_time > 0, "{me:?}");
         assert!(list.iter().any(|p| p.pid == 4 && &*p.name == "System"));
         assert!(list.iter().any(|p| p.pid == 0));
         let scm = Scm::open().expect("scm");

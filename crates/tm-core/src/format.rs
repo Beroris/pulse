@@ -44,6 +44,13 @@ pub fn mem_column(b: u64) -> String {
     if v < GB { format!("{:.1} MB", v / MB) } else { format!("{:.2} GB", v / GB) }
 }
 
+/// Process memory in MB whatever its size, for people who like to compare it that way:
+/// "0.8 MB", "412.6 MB", "2,080.4 MB".
+pub fn mem_column_mb(b: u64) -> String {
+    let tenths = ((b as f64 / MB) * 10.0).round() as u64;
+    format!("{}.{} MB", count(tenths / 10), tenths % 10)
+}
+
 /// Disk throughput for a table column: "0 MB/s", "0.1 MB/s", "35.2 MB/s".
 pub fn rate_column(bytes_per_sec: f64) -> String {
     let mb = bytes_per_sec / MB;
@@ -171,6 +178,8 @@ mod tests {
         assert_eq!(mem_column(800 * 1024), "0.8 MB");
         assert_eq!(mem_column(412 * 1024 * 1024 + 600 * 1024), "412.6 MB");
         assert_eq!(mem_column(1_331_439_861), "1.24 GB");
+        assert_eq!(mem_column_mb(800 * 1024), "0.8 MB");
+        assert_eq!(mem_column_mb(2_181_454_643), "2,080.4 MB");
         assert_eq!(rate_column(0.0), "0 MB/s");
         assert_eq!(rate_column(0.1 * MB), "0.1 MB/s");
         assert_eq!(pct_column(0.0), "0%");
