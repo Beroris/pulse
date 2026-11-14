@@ -85,6 +85,23 @@ export component Sidebar inherits Rectangle {
         NavItem { icon: Icons.startup; label: "Startup"; index: 3; hint: "Ctrl+4"; }
         NavItem { icon: Icons.services; label: "Services"; index: 4; hint: "Ctrl+5"; }
         Rectangle { vertical-stretch: 1; }
+        if App.update-offer != "": Rectangle {
+            height: 34px;
+            border-radius: Theme.radius-small;
+            background: uta.has-hover ? Theme.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Update to Pulse " + App.update-offer;
+            accessible-action-default => { App.update-clicked(); }
+            HorizontalLayout {
+                padding-left: App.sidebar-compact ? 0px : 12px;
+                alignment: App.sidebar-compact ? center : start;
+                spacing: 12px;
+                Icon { d: Icons.arrow-down; size: 16px; color: Theme.accent; y: (parent.height - self.height) / 2; }
+                if !App.sidebar-compact: Text { text: "Update to " + App.update-offer; color: Theme.accent; font-size: Theme.small; font-weight: 500; vertical-alignment: center; }
+            }
+            uta := TouchArea { mouse-cursor: pointer; clicked => { App.update-clicked(); } }
+            if uta.has-hover: Tooltip { Text { text: App.update-note; color: Theme.text; font-size: Theme.small; } }
+        }
         if !App.elevated && !App.sidebar-compact: Rectangle {
             height: 34px;
             border-radius: Theme.radius-small;

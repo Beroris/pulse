@@ -254,6 +254,8 @@ pub struct Settings {
     /// Closing the window keeps the app in the tray instead of quitting.
     pub close_to_tray: bool,
     pub minimize_to_tray: bool,
+    /// Look for a new version shortly after starting, and once a day.
+    pub check_updates: bool,
     // Processes
     pub view: ViewMode,
     pub sort: Column,
@@ -293,6 +295,7 @@ impl Default for Settings {
             tray_icon: true,
             close_to_tray: false,
             minimize_to_tray: false,
+            check_updates: true,
             view: ViewMode::Grouped,
             sort: Column::Cpu,
             sort_desc: true,

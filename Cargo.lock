@@ -4456,7 +4456,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tm-app"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "slint",
  "slint-build",
@@ -4465,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "tm-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4473,7 +4473,7 @@ dependencies = [
 
 [[package]]
 name = "tm-windows"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "embed-resource",
  "raw-window-handle",

@@ -185,6 +185,18 @@ export global App {
     in-out property <bool> close-to-tray;
     in-out property <bool> minimize-to-tray;
     in-out property <bool> autostart;
+    // Opens in place of Task Manager (Ctrl+Shift+Esc).
+    in-out property <bool> task-manager;
+    in property <string> task-manager-note;
+    in property <bool> task-manager-busy;
+    // Updates: where one has got to, and the button that moves it on.
+    in-out property <bool> check-updates;
+    in property <string> update-note;
+    in property <string> update-action;
+    in property <bool> update-busy;
+    // The newer version on offer, ready to install or to get from GitHub. Empty when none.
+    in property <string> update-offer;
+    callback update-clicked();
     in-out property <bool> compact-click-through;
     in-out property <[bool]> compact-metrics;
     in property <[Swatch]> swatches;

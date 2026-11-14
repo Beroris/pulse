@@ -264,6 +264,20 @@ pub struct StartupEntry {
     pub icon: Option<IconPixels>,
 }
 
+/// What opens when something starts Windows' Task Manager: Ctrl+Shift+Esc, the taskbar's menu,
+/// Ctrl+Alt+Del, or `taskmgr` typed anywhere.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TaskManagerTarget {
+    /// Task Manager itself.
+    TaskManager,
+    /// This copy of the app.
+    ThisApp,
+    /// Another program, by name.
+    Other(String),
+    /// A program that isn't there any more, so nothing opens.
+    Missing(String),
+}
+
 /// Actions on the system. Called from worker threads, so it must be shareable.
 pub trait SystemControl: Send + Sync {
     fn is_elevated(&self) -> bool;
@@ -295,6 +309,14 @@ pub trait SystemControl: Send + Sync {
 
     fn autostart(&self) -> bool;
     fn set_autostart(&self, on: bool) -> ActionResult;
+
+    fn task_manager_target(&self) -> TaskManagerTarget;
+    /// Makes this copy open in place of Task Manager, or gives it back. It applies to every
+    /// account on the PC, so Windows asks for administrator rights. Turning it off only removes
+    /// this copy: another program's hold stays.
+    fn set_task_manager_target(&self, this_app: bool) -> ActionResult;
+    /// A portable copy, which can be moved or deleted without uninstalling.
+    fn is_portable(&self) -> bool;
 
     fn copy_text(&self, text: &str);
     fn open_location(&self, path: &str);

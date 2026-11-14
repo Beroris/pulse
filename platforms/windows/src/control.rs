@@ -189,6 +189,12 @@ fn token_elevated(h: HANDLE) -> Option<bool> {
     Some(e.TokenIsElevated != 0)
 }
 
+/// Whether another process runs as administrator. `None` if it can't be checked.
+pub fn process_elevated(pid: u32) -> Option<bool> {
+    let h = Owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
+    token_elevated(h.get())
+}
+
 fn architecture(h: HANDLE) -> Option<String> {
     let (mut process, mut native) = (IMAGE_FILE_MACHINE(0), IMAGE_FILE_MACHINE(0));
     unsafe { IsWow64Process2(h, &mut process, Some(&mut native)) }.ok()?;
@@ -375,6 +381,11 @@ pub fn run_admin_action(args: &[String]) -> i32 {
             }
             "startup" => crate::startup::set_enabled(&get(2)?, get(1)? == "enable"),
             "standby" => clear_standby_now(),
+            "task-manager" => match get(1)?.as_str() {
+                "on" => crate::taskmgr::set(true),
+                "off" => crate::taskmgr::set(false),
+                _ => Err(ActionError::Failed("Bad argument.".into())),
+            },
             _ => Err(ActionError::Failed("Unknown action.".into())),
         }
     })();
@@ -568,6 +579,21 @@ impl SystemControl for WinControl {
             k.delete_value(util::RUN_VALUE);
             Ok(())
         }
+    }
+
+    fn task_manager_target(&self) -> TaskManagerTarget {
+        crate::taskmgr::target()
+    }
+
+    fn set_task_manager_target(&self, this_app: bool) -> ActionResult {
+        match crate::taskmgr::set(this_app) {
+            Err(ActionError::NeedsElevation(_)) => elevated(&["task-manager".into(), if this_app { "on" } else { "off" }.into()]),
+            r => r,
+        }
+    }
+
+    fn is_portable(&self) -> bool {
+        util::is_portable()
     }
 
     fn copy_text(&self, text: &str) {

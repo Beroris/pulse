@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use tm_core::platform::{MetaResolver, Sampler, SystemControl};
+use tm_core::update::UpdateHost;
 
 /// An sRGB colour.
 pub type Rgb = (u8, u8, u8);
@@ -51,6 +52,11 @@ pub struct Platform {
     pub settings_path: PathBuf,
     /// Started at sign-in: stay in the tray.
     pub start_hidden: bool,
+    /// Started to show the startup apps (Windows' links to Task Manager's Startup page).
+    pub open_startup: bool,
+    pub updates: Arc<dyn UpdateHost>,
+    /// Started again by an update: say so.
+    pub just_updated: bool,
 }
 
 /// Runs the app until it quits.
@@ -58,7 +64,8 @@ pub fn run(platform: Platform) -> Result<(), slint::PlatformError> {
     ctrl::run(platform)
 }
 
-/// A request from another copy of the app ("show" or "quit"). Safe to call from any thread.
+/// A request from another copy of the app ("show", "startup" or "quit"). Safe to call from any
+/// thread.
 pub fn external_command(command: String) {
     let _ = slint::invoke_from_event_loop(move || ctrl::with(|c| c.external(&command)));
 }

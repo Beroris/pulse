@@ -18,5 +18,6 @@ pub mod process;
 pub mod safety;
 pub mod settings;
 pub mod table;
+pub mod update;
 
 pub use model::*;

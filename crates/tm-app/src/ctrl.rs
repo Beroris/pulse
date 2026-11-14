@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{CloseRequestResponse, ComponentHandle, Image, PhysicalPosition, PhysicalSize, SharedString, Timer, TimerMode, VecModel};
@@ -18,6 +18,7 @@ use tm_core::platform::*;
 use tm_core::safety::Protection;
 use tm_core::settings::*;
 use tm_core::table::RowId;
+use tm_core::update::{self as feed, Phase as UpdatePhase, Release, UpdateHost};
 use tm_core::{Frame, ProcKey, SystemInfo, format};
 
 use crate::lists::{self, Services, Startup};
@@ -40,6 +41,10 @@ const SWATCHES: [Rgb; 8] = [
 /// In the order the compact monitor shows them, and Settings lists them.
 const METRICS: [Metric; 7] = [Metric::Fps, Metric::Cpu, Metric::Memory, Metric::Gpu, Metric::GpuMemory, Metric::Disk, Metric::Network];
 const DARK_BG: Rgb = (0x13, 0x13, 0x15);
+/// The first look for a new version, a little after starting. Then a tick each hour looks once a day.
+const FIRST_UPDATE_CHECK: Duration = Duration::from_secs(8);
+const UPDATE_TICK: Duration = Duration::from_secs(60 * 60);
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const LIGHT_BG: Rgb = (0xfa, 0xfa, 0xfb);
 
 thread_local! {
@@ -151,6 +156,29 @@ struct State {
     setup_pending: bool,
     /// The compact monitor has no saved position yet and still needs its default one.
     compact_unplaced: bool,
+    update: UpdateState,
+}
+
+/// Where an update has got to, and what finishing it needs.
+struct UpdateState {
+    phase: UpdatePhase,
+    /// Asked for in Settings, so a failure is shown rather than kept quiet.
+    manual: bool,
+    last_check: Option<SystemTime>,
+    /// The downloaded version, once it's ready.
+    file: Option<PathBuf>,
+    /// The new version's release page.
+    page: String,
+    /// What earlier updates left behind has been cleared.
+    cleaned: bool,
+}
+
+/// What the update worker found.
+enum UpdateEvent {
+    Found(Release),
+    UpToDate,
+    Downloaded(PathBuf),
+    Failed(String),
 }
 
 pub struct Ctrl {
@@ -160,6 +188,7 @@ pub struct Ctrl {
     collector: Collector,
     control: Arc<dyn SystemControl>,
     shell: Rc<dyn Shell>,
+    updates: Arc<dyn UpdateHost>,
     st: RefCell<State>,
     m: Models,
     icons: IconSet,
@@ -168,6 +197,7 @@ pub struct Ctrl {
     services_timer: Timer,
     theme_timer: Timer,
     trim_timer: Timer,
+    update_timer: Timer,
 }
 
 macro_rules! cb {
@@ -243,6 +273,7 @@ pub fn run(p: Platform) -> Result<(), slint::PlatformError> {
         quitting: false,
         setup_pending: false,
         compact_unplaced: false,
+        update: UpdateState { phase: UpdatePhase::Idle, manual: false, last_check: None, file: None, page: feed::RELEASES_PAGE.to_string(), cleaned: false },
         s,
     };
     let demand = initial_demand(&state, !p.start_hidden);
@@ -272,6 +303,7 @@ pub fn run(p: Platform) -> Result<(), slint::PlatformError> {
         collector,
         control: p.control,
         shell: p.shell,
+        updates: p.updates,
         st: RefCell::new(state),
         m: Models::new(),
         icons,
@@ -280,6 +312,7 @@ pub fn run(p: Platform) -> Result<(), slint::PlatformError> {
         services_timer: Timer::default(),
         theme_timer: Timer::default(),
         trim_timer: Timer::default(),
+        update_timer: Timer::default(),
     });
     {
         let mut st = c.st.borrow_mut();
@@ -287,6 +320,13 @@ pub fn run(p: Platform) -> Result<(), slint::PlatformError> {
     }
     CTRL.with(|x| *x.borrow_mut() = Some(c.clone()));
     c.init(p.start_hidden);
+    if p.open_startup {
+        c.navigate(Page::Startup);
+    }
+    c.start_update_checks();
+    if p.just_updated {
+        c.notice(&format!("Updated to Pulse {}.", env!("CARGO_PKG_VERSION")), 0);
+    }
     let r = slint::run_event_loop_until_quit();
     c.save_now();
     r
@@ -361,6 +401,8 @@ impl Ctrl {
         app.set_column_choices(util::strings(&labels));
         app.set_overview_note("Nothing needs attention. Insights appear here when something stays unusual for a while, such as memory staying nearly full or one app keeping the CPU busy.".into());
         app.set_autostart(self.control.autostart());
+        self.render_task_manager();
+        self.render_update();
         self.push_settings();
         self.apply_theme(true);
         self.wire();
@@ -439,6 +481,7 @@ impl Ctrl {
         app.set_tray_icon(s.tray_icon);
         app.set_close_to_tray(s.close_to_tray);
         app.set_minimize_to_tray(s.minimize_to_tray);
+        app.set_check_updates(s.check_updates);
         app.set_compact_click_through(s.compact.click_through);
         app.set_sidebar_compact(s.sidebar_compact);
         app.set_view_mode(match s.view {
@@ -727,6 +770,7 @@ impl Ctrl {
             c.table_layout_changed()
         });
         cb!(c, app, on_clear_standby, | | c.clear_standby());
+        cb!(c, app, on_update_clicked, | | c.update_clicked());
 
         // Settings
         cb!(c, app, on_setting_int, |k, v| c.setting_int(&k, v));
@@ -1697,6 +1741,217 @@ impl Ctrl {
         });
     }
 
+    // ─── Updates ───────────────────────────────────────────────────────────
+
+    /// The first look a little after starting, then a tick each hour that looks once a day.
+    fn start_update_checks(self: &Rc<Self>) {
+        Timer::single_shot(FIRST_UPDATE_CHECK, || with(|c| c.update_tick()));
+        self.update_timer.start(TimerMode::Repeated, UPDATE_TICK, || with(|c| c.update_tick()));
+    }
+
+    fn update_tick(self: &Rc<Self>) {
+        let due = {
+            let st = self.st.borrow();
+            // By the clock on the wall, so a day asleep counts.
+            st.s.check_updates && st.update.last_check.is_none_or(|at| at.elapsed().map_or(true, |since| since >= DAY))
+        };
+        if due {
+            self.check_for_update(false);
+        }
+    }
+
+    fn check_for_update(self: &Rc<Self>, manual: bool) {
+        let clean = {
+            let mut st = self.st.borrow_mut();
+            let u = &mut st.update;
+            if matches!(u.phase, UpdatePhase::Checking | UpdatePhase::Downloading(_) | UpdatePhase::Ready(_) | UpdatePhase::Installing) {
+                return;
+            }
+            u.phase = UpdatePhase::Checking;
+            u.manual = manual;
+            u.last_check = Some(SystemTime::now());
+            // By the first look, a Setup that started this copy has long finished: what it left
+            // can go.
+            !std::mem::replace(&mut u.cleaned, true)
+        };
+        self.render_update();
+        let host = self.updates.clone();
+        let _ = std::thread::Builder::new().name("update".into()).spawn(move || {
+            if clean {
+                host.clean_up();
+            }
+            match host.check() {
+                Err(e) => post(move |c| c.update_event(UpdateEvent::Failed(e))),
+                Ok(None) => post(|c| c.update_event(UpdateEvent::UpToDate)),
+                Ok(Some(release)) => {
+                    let download = release.download.clone().filter(|_| host.kind().installs_itself());
+                    post(move |c| c.update_event(UpdateEvent::Found(release)));
+                    if let Some(d) = download {
+                        let event = match host.download(&d) {
+                            Ok(file) => UpdateEvent::Downloaded(file),
+                            Err(e) => UpdateEvent::Failed(e),
+                        };
+                        post(move |c| c.update_event(event));
+                    }
+                }
+            }
+        });
+    }
+
+    fn update_event(self: &Rc<Self>, event: UpdateEvent) {
+        let installs_itself = self.updates.kind().installs_itself();
+        {
+            let mut st = self.st.borrow_mut();
+            let u = &mut st.update;
+            match event {
+                UpdateEvent::Found(release) => {
+                    u.page = release.page;
+                    u.phase = if installs_itself && release.download.is_some() { UpdatePhase::Downloading(release.version) } else { UpdatePhase::Available(release.version) };
+                }
+                UpdateEvent::UpToDate => u.phase = UpdatePhase::UpToDate,
+                UpdateEvent::Downloaded(file) => {
+                    if let UpdatePhase::Downloading(v) = &u.phase {
+                        u.phase = UpdatePhase::Ready(v.clone());
+                        u.file = Some(file);
+                    }
+                }
+                UpdateEvent::Failed(e) => {
+                    if u.manual {
+                        u.phase = UpdatePhase::Failed(e);
+                    } else {
+                        // No connection, or GitHub being busy, passes: stay quiet and look again
+                        // in an hour.
+                        u.phase = UpdatePhase::Idle;
+                        u.last_check = None;
+                    }
+                }
+            }
+        }
+        self.render_update();
+        // The first look runs a few seconds after launch, which may be at sign-in with no window
+        // open: hand back what talking to GitHub took once it's done.
+        self.release_when_idle();
+    }
+
+    /// The button in Settings and the sidebar: install what's ready, get what this copy can't
+    /// install, or look now.
+    fn update_clicked(self: &Rc<Self>) {
+        let (phase, page) = {
+            let st = self.st.borrow();
+            (st.update.phase.clone(), st.update.page.clone())
+        };
+        match phase {
+            UpdatePhase::Ready(_) => self.install_update(),
+            UpdatePhase::Available(_) => {
+                if page.starts_with(feed::DOWNLOADS_FROM) {
+                    self.control.open_url(&page);
+                }
+            }
+            UpdatePhase::Checking | UpdatePhase::Downloading(_) | UpdatePhase::Installing => {}
+            UpdatePhase::Idle | UpdatePhase::UpToDate | UpdatePhase::Failed(_) => self.check_for_update(true),
+        }
+    }
+
+    /// Starts installing the downloaded version, and quits so it can take over.
+    fn install_update(self: &Rc<Self>) {
+        let file = {
+            let st = self.st.borrow();
+            match (&st.update.phase, &st.update.file) {
+                (UpdatePhase::Ready(_), Some(file)) => file.clone(),
+                _ => return,
+            }
+        };
+        match self.updates.install(&file) {
+            Ok(()) => {
+                self.st.borrow_mut().update.phase = UpdatePhase::Installing;
+                self.render_update();
+                self.quit();
+            }
+            Err(e) => {
+                {
+                    let mut st = self.st.borrow_mut();
+                    st.update.phase = UpdatePhase::Failed(e.clone());
+                    st.update.file = None;
+                }
+                self.render_update();
+                self.notice(&format!("Couldn't update Pulse. {e}"), 2);
+            }
+        }
+    }
+
+    fn render_update(&self) {
+        let (note, action, busy, offer) = {
+            let st = self.st.borrow();
+            let (note, action, busy) = match &st.update.phase {
+                UpdatePhase::Idle => ("Look for a newer version now.".to_string(), "Check now", false),
+                UpdatePhase::Checking => ("Looking for a newer version…".to_string(), "Checking…", true),
+                UpdatePhase::UpToDate => ("You have the latest version.".to_string(), "Check now", false),
+                UpdatePhase::Downloading(v) => (format!("Downloading Pulse {v}…"), "Downloading…", true),
+                UpdatePhase::Ready(v) => (format!("Pulse {v} is ready. Installing takes a few seconds, then Pulse opens again."), "Install now", false),
+                UpdatePhase::Available(v) => (format!("Pulse {v} is out. This copy can't update itself, so get it from GitHub."), "Get it", false),
+                UpdatePhase::Installing => ("Installing…".to_string(), "Installing…", true),
+                UpdatePhase::Failed(e) => (e.clone(), "Try again", false),
+            };
+            let offer = match &st.update.phase {
+                UpdatePhase::Ready(v) | UpdatePhase::Available(v) => v.clone(),
+                _ => String::new(),
+            };
+            (note, action, busy, offer)
+        };
+        let app = self.app();
+        app.set_update_note(note.into());
+        app.set_update_action(action.into());
+        app.set_update_busy(busy);
+        app.set_update_offer(offer.into());
+    }
+
+    // ─── In place of Task Manager ─────────────────────────────────────────
+
+    fn set_task_manager(self: &Rc<Self>, on: bool) {
+        self.app().set_task_manager_busy(true);
+        let control = self.control.clone();
+        std::thread::spawn(move || {
+            // Waits for the administrator prompt and the elevated helper.
+            let r = control.set_task_manager_target(on);
+            post(move |c| {
+                c.app().set_task_manager_busy(false);
+                let now = c.render_task_manager();
+                match r {
+                    Ok(()) if (now == TaskManagerTarget::ThisApp) == on => {
+                        c.notice(if on { "Ctrl+Shift+Esc opens Pulse now." } else { "Ctrl+Shift+Esc opens Task Manager again." }, 0)
+                    }
+                    // It went through, then something put it back.
+                    Ok(()) => c.notice("Windows accepted the change, but something undid it. Security software sometimes does.", 2),
+                    Err(ActionError::Cancelled) => {}
+                    Err(e) => c.notice(&format!("Couldn't change that. {}", e.message()), 2),
+                }
+            });
+        });
+    }
+
+    /// Reads what opens in place of Task Manager into the setting, and returns it.
+    fn render_task_manager(&self) -> TaskManagerTarget {
+        let target = self.control.task_manager_target();
+        // One value for the whole PC, pointing into this account's files.
+        const EVERYONE: &str = "Windows applies this to every account on this PC, and one that can't open this copy of Pulse gets no Task Manager.";
+        let mut note = match &target {
+            TaskManagerTarget::TaskManager => format!("Open Pulse wherever Task Manager would open, such as the taskbar menu and Ctrl+Alt+Del. {EVERYONE}"),
+            TaskManagerTarget::ThisApp => format!("Pulse opens wherever Task Manager would. {EVERYONE} Turn this off to get Task Manager back."),
+            TaskManagerTarget::Other(name) => format!("Ctrl+Shift+Esc opens {name} now. Turn this on to open Pulse instead."),
+            TaskManagerTarget::Missing(path) => format!("Ctrl+Shift+Esc opens nothing right now: it's set to start {path}, which isn't there any more. Turn this on to open Pulse instead."),
+        };
+        if self.control.is_portable() {
+            note.push_str(" This is a portable copy: turn this off before you move or delete it, or Ctrl+Shift+Esc will open nothing.");
+        }
+        if !self.st.borrow().elevated {
+            note.push_str(" Changing it asks for administrator rights.");
+        }
+        let app = self.app();
+        app.set_task_manager(target == TaskManagerTarget::ThisApp);
+        app.set_task_manager_note(note.into());
+        target
+    }
+
     // ─── Memory ────────────────────────────────────────────────────────────
 
     fn clear_standby(self: &Rc<Self>) {
@@ -1780,6 +2035,10 @@ impl Ctrl {
                         }
                     }
                 });
+            }
+            // Another program may have changed it since.
+            Page::Settings => {
+                self.render_task_manager();
             }
             _ => {}
         }
@@ -1937,6 +2196,13 @@ impl Ctrl {
                     self.notice(&format!("Couldn't change that. {}", e.message()), 2);
                 }
                 self.app().set_autostart(self.control.autostart());
+            }
+            "task-manager" => self.set_task_manager(v),
+            "check-updates" => {
+                self.st.borrow_mut().s.check_updates = v;
+                if v {
+                    self.update_tick();
+                }
             }
             "remember-window" => self.st.borrow_mut().s.remember_window = v,
             "always-on-top" => {
@@ -2366,6 +2632,10 @@ impl Ctrl {
     pub fn external(self: &Rc<Self>, cmd: &str) {
         match cmd {
             "quit" => self.quit(),
+            "startup" => {
+                self.navigate(Page::Startup);
+                self.show_main();
+            }
             _ => self.show_main(),
         }
     }

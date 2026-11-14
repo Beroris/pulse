@@ -63,14 +63,18 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreve
 
 [Icons]
 Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Task manager: see what your PC is doing"
-Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Task manager: see what your PC is doing"; Tasks: desktopicon
+; An update leaves the desktop as the user has it.
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Task manager: see what your PC is doing"; Tasks: desktopicon; Check: not IsUpdate
 
 [Registry]
-; The same entry the app's own "Start when I sign in" switch writes, so the two agree.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\{#AppExe}"" --background"; Tasks: autostart; Flags: uninsdeletevalue
+; The same entry the app's own "Start when I sign in" switch writes, so the two agree. An update
+; leaves it as that switch last set it.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\{#AppExe}"" --background"; Tasks: autostart; Flags: uninsdeletevalue; Check: not IsUpdate
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: postinstall nowait skipifsilent
+; Pulse started this update and quit for it, so it comes back when it's done, and says so.
+Filename: "{app}\{#AppExe}"; Parameters: "--updated"; Flags: nowait; Check: IsUpdate
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"
@@ -79,6 +83,20 @@ Type: dirifempty; Name: "{app}"
 const
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
   ApprovedKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
+  { Where the app's "Open with Ctrl+Shift+Esc" setting points Task Manager at it. }
+  TaskManagerKey = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\taskmgr.exe';
+
+{ Pulse runs Setup with /UPDATE when it updates itself. Setup then changes nothing but the
+  app, and starts it again at the end. }
+function IsUpdate(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/UPDATE') = 0 then
+      Result := True;
+end;
 
 { Asks a running copy to quit, so its exe can be replaced or removed. }
 procedure QuitApp();
@@ -108,8 +126,32 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   { Unticking the sign-in option on an upgrade turns it off, as it says. }
-  if (CurStep = ssPostInstall) and not WizardIsTaskSelected('autostart') then
+  if (CurStep = ssPostInstall) and not IsUpdate() and not WizardIsTaskSelected('autostart') then
     RegDeleteValue(HKCU, RunKey, '{#AppName}');
+end;
+
+function OpensForTaskManager(): Boolean;
+var
+  Value: String;
+begin
+  Result := RegQueryStringValue(HKLM64, TaskManagerKey, 'Debugger', Value) and (Pos(Lowercase(ExpandConstant('{app}\{#AppExe}')), Lowercase(Value)) > 0);
+end;
+
+{ If Ctrl+Shift+Esc opens this copy, gives it back to Task Manager first: once the exe is gone it
+  would open nothing. The setting is for the whole PC, so Windows asks for administrator rights. }
+function InitializeUninstall(): Boolean;
+var
+  Exe: String;
+  Code: Integer;
+begin
+  Result := True;
+  Exe := ExpandConstant('{app}\{#AppExe}');
+  if OpensForTaskManager() and FileExists(Exe) then
+  begin
+    ShellExec('runas', Exe, '--admin-action task-manager off', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    if OpensForTaskManager() and not UninstallSilent() then
+      Result := MsgBox('Ctrl+Shift+Esc still opens {#AppName}, and would open nothing once it''s removed. To give it back to Task Manager, turn off "Open with Ctrl+Shift+Esc" in {#AppName}''s settings first.' #13#10#13#10 'Uninstall anyway?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

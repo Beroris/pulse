@@ -1,13 +1,13 @@
 //! One running copy: a named mutex says whether another is running, and a hidden message-only
 //! window lets a second launch (or the installer's `--quit`) hand it a command.
 
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WNDCLASSW,
+    AllowSetForegroundWindow, ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, MSGFLT_ALLOW, RegisterClassW,
+    SMTO_ABORTIFHUNG, SendMessageTimeoutW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WNDCLASSW,
 };
 use windows::core::PCWSTR;
 
@@ -24,6 +24,11 @@ pub fn claim() -> Option<Instance> {
     let name = wide(MUTEX_NAME);
     let h = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) }.ok()?;
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        // Someone else's. Holding the handle would keep the mutex alive after that copy exits,
+        // and a later claim (taking over from it) would never succeed.
+        unsafe {
+            let _ = CloseHandle(h);
+        }
         return None;
     }
     Some(Instance(h))
@@ -33,6 +38,14 @@ fn find_running() -> Option<HWND> {
     let class = wide(IPC_CLASS);
     let h = unsafe { FindWindowExW(Some(HWND_MESSAGE), None, PCWSTR(class.as_ptr()), PCWSTR::null()) }.ok()?;
     (!h.is_invalid()).then_some(h)
+}
+
+/// Process ID of the running copy, if its window is up.
+pub fn running_pid() -> Option<u32> {
+    let h = find_running()?;
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
 }
 
 /// Sends `command` to the running copy. Returns its process ID when it was reached. Waits up to
@@ -96,7 +109,7 @@ pub fn listen() {
         let module = GetModuleHandleW(None).unwrap_or_default();
         let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: module.into(), lpszClassName: PCWSTR(class.as_ptr()), ..Default::default() };
         RegisterClassW(&wc);
-        let _ = CreateWindowExW(
+        let window = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(class.as_ptr()),
             PCWSTR::null(),
@@ -110,5 +123,11 @@ pub fn listen() {
             Some(module.into()),
             None,
         );
+        // A copy running as administrator (restarted that way, or started by Ctrl+Shift+Esc in
+        // place of Task Manager) still hears launches and the installer's --quit, which run
+        // without it. Windows drops their messages unless it says so.
+        if let Ok(window) = window {
+            let _ = ChangeWindowMessageFilterEx(window, WM_COPYDATA, MSGFLT_ALLOW, None);
+        }
     }
 }

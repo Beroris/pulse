@@ -15,11 +15,13 @@ It's part of the Bero suite, next to Prism, Orbit and Spotlight: same font, same
 - **Startup.** Everything that starts when you sign in: both Run keys, both Startup folders and Store apps' startup tasks. Sort and resize the columns, and filter by enabled or disabled and by where each one is registered. Disabling uses the same switch Windows Task Manager and Settings use, so nothing is ever deleted and you can turn it back on from any of the three.
 - **Services.** Start, stop and restart services and change their startup type, with a clear warning on the ones Windows relies on. Sort and resize the columns, and filter by running or stopped and by startup type.
 - **Compact monitor.** A small, rounded, always-on-top readout of the numbers you pick: FPS, CPU (with its temperature, when it can be read), memory, GPU and its temperature, GPU memory, disk and network. Make it see-through, or let clicks pass straight through it to whatever is underneath. While only the monitor is showing, the main window isn't drawn at all.
-- **FPS.** The frame rate of the app in front, counted from the same Windows graphics events Xbox Game Bar and PresentMon use. It works for DirectX 9 to 12, Vulkan and OpenGL games, and for browsers. Windows allows this for administrators, and for anyone who has given Game Bar's FPS counter its one-time permission. The counting only runs while FPS is on screen.
+- **FPS.** The frame rate of the app in front, counted from the same Windows graphics events Xbox Game Bar and PresentMon use. It works for DirectX 9 to 12, Vulkan and OpenGL games, and for browsers. Windows only allows it for programs running as administrator, so use **Run as administrator** in the sidebar, or start Pulse that way: it takes over from a copy that's running without it. The counting only runs while FPS is on screen.
 - **Tray.** Optional. Close to the tray, minimise to the tray, or let the window close the app like any other.
+- **Ctrl+Shift+Esc.** Optional. Turn on **Open with Ctrl+Shift+Esc** in Settings and Pulse opens wherever Task Manager would: Ctrl+Shift+Esc, the taskbar's menu, Ctrl+Alt+Del and `taskmgr`. Windows' links to Task Manager's startup apps open Pulse's Startup page. See [Opening with Ctrl+Shift+Esc](#opening-with-ctrlshiftesc) for how it works and how to undo it by hand.
 - **No admin prompt to start.** It runs with your normal rights. When something needs admin rights (ending a process another user owns, stopping a service), it asks Windows for them for that one action only, through the usual UAC prompt.
 - **Honest numbers.** If Windows doesn't report something on your PC, such as a temperature or a GPU's memory, it says so instead of showing a zero. CPU temperature is the usual one: Windows only reports it on PCs whose firmware has an ACPI thermal zone, which many desktop boards don't.
 - **CPU temperature and power, through PawnIO.** Reading the CPU's own sensor takes a kernel driver. This app won't install one, but if [PawnIO](https://pawnio.eu) is already there (LibreHardwareMonitor and OpenRGB install it, for example), Pulse uses it when you run it as administrator. That gives the CPU's temperature (Tctl on Ryzen) and its package power. PawnIO is signed, and it runs only signed modules that each allow a fixed list of reads. The two modules used here are built in, and only their read functions are called.
+- **Updates.** Shortly after it starts and once a day, Pulse asks GitHub whether there's a newer version. If there is, it downloads in the background and **Update to** the new version shows in the sidebar. One click installs it, and Pulse opens again a few seconds later. You can turn the check off in Settings.
 - **Settings.** System, dark or light theme; your Windows accent colour or one of several others; interface scale; refresh rate (0.5 to 5 s) and history length (1 to 10 minutes); whether to keep monitoring, keep only history, or pause while hidden.
 
 ## Keys
@@ -54,6 +56,25 @@ Download **Pulse-&lt;version&gt;-Setup.exe** from [Releases](https://github.com/
 To run it without installing, download **Pulse-&lt;version&gt;-Portable.exe** instead. Run it from anywhere, a USB stick included. It keeps its settings in a "Pulse settings" folder beside itself rather than in your profile.
 
 It needs 64-bit Windows 10 version 1809 or newer, or Windows 11. So far it has been tested on Windows 11.
+
+## Opening with Ctrl+Shift+Esc
+
+Windows keeps Ctrl+Shift+Esc for Task Manager, but it lets you choose a program to start in place of Task Manager. Process Explorer's "Replace Task Manager" uses the same setting: a `Debugger` value under
+
+```
+HKEY_LOCAL_MACHINESOFTWAREMicrosoftWindows NTCurrentVersionImage File Execution Options	askmgr.exe
+```
+
+that holds the path of Pulse's exe. A few things follow from that:
+
+- Turning it on or off asks for administrator rights, because the setting is for the whole PC.
+- It applies to every account on the PC. Pulse installs into your own profile, so another account that can't open that folder gets no Task Manager at all while it's on.
+- Uninstalling Pulse turns it off first. A portable copy can't do that for you: turn it off before you move or delete the copy, or Ctrl+Shift+Esc will open nothing.
+- If Ctrl+Shift+Esc ever opens nothing, the setting points at a copy that has gone. Turn the switch on in any copy of Pulse to point it there, or delete the value yourself from an administrator terminal:
+
+  ```
+  reg delete "HKLMSOFTWAREMicrosoftWindows NTCurrentVersionImage File Execution Options	askmgr.exe" /v Debugger /f
+  ```
 
 ## Running it from other tools
 
@@ -105,7 +126,7 @@ A macOS version would reuse `tm-core` and `tm-app` and add a `platforms/macos`. 
 
 ## Privacy
 
-Pulse never connects to the network. There's no account, no telemetry and no update check. Settings are in `%APPDATA%\Pulse\settings.json` (or beside the portable exe), and that's all it writes, apart from the Windows changes you ask it to make.
+The only network access is the update check. Pulse asks GitHub for its latest release, and if it's newer, downloads it from GitHub and checks it against the size and SHA-256 GitHub lists. Nothing about you or your PC is sent. You can turn the check off in Settings, under About. There's no account and no telemetry. Settings are in `%APPDATA%\Pulse\settings.json` (or beside the portable exe), and that's all it writes, apart from a downloaded update until it's installed, and the Windows changes you ask it to make.
 
 ## Support
 

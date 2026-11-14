@@ -5,8 +5,9 @@
 //! Direct3D 9, and the graphics kernel, which also sees Vulkan and OpenGL. Each provider is
 //! filtered to its present events by ID, so nothing else is delivered.
 //!
-//! Windows lets administrators and members of the Performance Log Users group start a session.
-//! Game Bar's FPS counter adds the user to that group when it asks for access.
+//! Windows lets administrators start a real-time session. Its rules also allow members of
+//! Performance Log Users, the group Game Bar's FPS counter adds you to, but Windows 11 has been
+//! seen refusing them unless elevated, so the app asks for administrator rights.
 //!
 //! A session outlives the process that started it, so it is stopped when the frame rate leaves
 //! the screen, when sampling pauses and when the app exits, and a leftover one from a crash is
@@ -405,8 +406,8 @@ mod tests {
         assert_eq!(track_rate(&t, freq, 1000), Some(120.0));
     }
 
-    /// Counts frames for three seconds and prints each process that presented. Needs to be run by
-    /// an administrator or a member of Performance Log Users:
+    /// Counts frames for three seconds and prints each process that presented. Needs to be run as
+    /// administrator:
     /// `cargo test -p tm-windows -- --ignored --nocapture traces_frames`
     #[test]
     #[ignore]

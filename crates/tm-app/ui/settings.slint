@@ -136,6 +136,12 @@ export component SettingsPage inherits Rectangle {
                 }
                 Divider { }
                 SettingRow {
+                    title: "Open with Ctrl+Shift+Esc";
+                    description: App.task-manager-note;
+                    Toggle { label: "Open with Ctrl+Shift+Esc"; enabled: !App.task-manager-busy; checked <=> App.task-manager; toggled(v) => { App.setting-bool("task-manager", v); } }
+                }
+                Divider { }
+                SettingRow {
                     title: "Remember window size and position";
                     Toggle { label: "Remember window size and position"; checked <=> App.remember-window; toggled(v) => { App.setting-bool("remember-window", v); } }
                 }
@@ -174,7 +180,7 @@ export component SettingsPage inherits Rectangle {
                         spacing: 0px;
                         Text { text: "Show"; color: Theme.text; font-size: Theme.body; font-weight: 500; }
                         Text {
-                            text: "The small always-on-top window (Ctrl+M). FPS is for the app in front, counted the way Xbox Game Bar counts it, and needs administrator rights or the permission Game Bar's FPS counter asks for. The CPU temperature needs PawnIO and Run as administrator.";
+                            text: "The small always-on-top window (Ctrl+M). FPS is for the app in front, counted the way Xbox Game Bar counts it. FPS and the CPU temperature need Run as administrator, and the CPU temperature also needs PawnIO.";
                             color: Theme.secondary;
                             font-size: Theme.small;
                             wrap: word-wrap;
@@ -216,6 +222,18 @@ export component SettingsPage inherits Rectangle {
                     title: "Pulse " + App.version;
                     description: "Free software under the GNU GPL, version 3.";
                     Button { text: "Source"; kind: 0; clicked => { App.open-url("https://github.com/Beroris/pulse"); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Updates";
+                    description: App.update-note;
+                    Button { text: App.update-action; kind: App.update-offer != "" ? 1 : 0; enabled: !App.update-busy; clicked => { App.update-clicked(); } }
+                }
+                Divider { }
+                SettingRow {
+                    title: "Check for updates";
+                    description: "Shortly after Pulse starts, and once a day. A new version downloads in the background, then waits for you to install it.";
+                    Toggle { label: "Check for updates"; checked <=> App.check-updates; toggled(v) => { App.setting-bool("check-updates", v); } }
                 }
                 Divider { }
                 SettingRow {
